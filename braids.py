@@ -8,10 +8,25 @@ import csv
 
 # parameters 
 output = True
-ic = "E3" # hopf or E3 or shear
-periodic = False
+ic = "E3" # hopf or E3 
+# closed: periodic = False, closed = True
+# periodic: periodic = True, closed = True
+# line-tied: periodic = False, closed = False
+bc = "line-tied"
+
+if bc == "line-tied":
+    periodic = False
+    closed = False
+
+elif bc == "closed":
+    periodic = False
+    closed = True
+
+elif bc == "periodic":
+    periodic = True # no top and bottom label
+    closed = True
+
 time_discr = "adaptive" # uniform or adaptive
-solver_type = "lu"
 
 if ic == "hopf":
     Lx, Ly, Lz = 8, 8, 20
@@ -26,8 +41,9 @@ if periodic:
 else:
     dirichlet_ids = ("on_boundary", "top", "bottom")
 
-k = 1  # polynomial degree
-tau = Constant(10)
+
+order = 1  # polynomial degree
+tau = Constant(1)
 t = Constant(0)
 dt = Constant(1)
 T = 10000
@@ -38,11 +54,11 @@ mesh.coordinates.dat.data[:, 0] -= Lx/2
 mesh.coordinates.dat.data[:, 1] -= Ly/2
 mesh.coordinates.dat.data[:, 2] -= Lz/2
 
-Vg = VectorFunctionSpace(mesh, "Q", k)
-Vg_ = FunctionSpace(mesh, "Q", k)
-Vc = FunctionSpace(mesh, "NCE", k)
-Vd = FunctionSpace(mesh, "NCF", k)
-Vn = FunctionSpace(mesh, "DQ", k-1)
+Vg = VectorFunctionSpace(mesh, "Q", order)
+Vg_ = FunctionSpace(mesh, "Q", order)
+Vc = FunctionSpace(mesh, "NCE", order)
+Vd = FunctionSpace(mesh, "NCF", order)
+Vn = FunctionSpace(mesh, "DQ", order-1)
 
 Z = MixedFunctionSpace([Vd, Vc, Vc, Vd, Vc])
 z = Function(Z)
@@ -75,11 +91,15 @@ F = (
     )
 
 # Boundary conditions
+# bcs for top and bottom
+B_init_bc = as_vector([0, 0, 1])
+
 bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]
-  
-# Solver parameters for fieldsplit
-if solver_type == "lu":
-    sp_fs = {
+if not closed:
+    bcs += DirichletBC(Z.sub(0), B_init_bc, "top")
+    bcs += DirichletBC(Z.sub(0), B_init_bc, "bottom")
+
+lu = {
 		"mat_type": "aij",
 		"snes_type": "newtonls",
         "snes_monitor": None,
@@ -87,50 +107,8 @@ if solver_type == "lu":
         "ksp_type":"preonly",
 		"pc_type": "lu",
         "pc_factor_mat_solver_type":"mumps"
-    }
-elif solver_type == "precond":
-    ICNTL_14 = 5000
-    tele_reduc_fac = int(MPI.COMM_WORLD.size/4)
-    if tele_reduc_fac < 1:
-        tele_reduc_fac = 1
-
-    sp_fs = {
-        "mat_type": "nest",
-        "snes_type": "newtonls",
-        "snes_monitor": None,
-        "snes_converged_reason": None,
-#"ksp_monitor_true_residual": None,
-#        "ksp_converged_reason": None,
-        "ksp_type":"fgmres",
-        "pc_type": "fieldsplit",
-        "pc_fieldsplit_type": "schur",
-        "pc_fieldsplit_0_fields": "0, 1",
-        "pc_fieldsplit_1_fields": "2, 3, 4",
-        "pc_fieldsplit_schur_precondition": "a11",
-        "pc_fieldsplit_schur_fact_type": "full",
-        }
-
-    field0 = {
-        "ksp_type": "fgmres",
-#"ksp_monitor": None,
-#        "ksp_converged_reason": None,
-        "pc_type": "python",
-        "pc_python_type": "firedrake.AssembledPC",
-        "ksp_max_it": 2, 
-        "assembled":{
-            "pc_type": "preonly", 
-            "pc_type": "telescope",
-            "pc_telescope_reduction_factor": tele_reduc_fac,
-            "pc_telescope_subcomm_type": "contiguous",
-            "telescope_pc_type": "lu",
-            "telescope_pc_factor_mat_solver_type": "mumps",
-            "telescope_pc_factor_mat_mumps_icntl_14": ICNTL_14,
-            },   
-        }
-    sp_fs["fieldsplit_0"] = field0
-    sp_fs["fieldsplit_1"] = field0
-
-
+}
+sp = lu
        
 
 (X0, Y0, Z0) = x = SpatialCoordinate(mesh)
@@ -164,9 +142,6 @@ elif ic == "E3":
 
     B_init = as_vector([B_x, B_y, B_z])
 
-elif ic == "shear":
-    B_init = as_vector([0, 0, Z0])
-
 
 (B_, j_, H_, u_, E_) = z.subfunctions
 B_.rename("MagneticField")
@@ -175,21 +150,21 @@ H_.rename("HCurlMagneticField")
 j_.rename("Current")
 u_.rename("Velocity")
 
-
-
-
 def project_initial_conditions(B_init):
     # Need to project the initial conditions
     # such that div(B) = 0 and B·n = 0
     Zp = MixedFunctionSpace([Vd, Vn])
     zp = Function(Zp)
     (B, p) = split(zp)
-    if not periodic: # non-periodic case
-        bcp = DirichletBC(Zp.sub(0), 0, "on_boundary")
-
-    else:# periodic case
+    if not closed:
+        bcp = [
+                DirichletBC(Zp.sub(0), 0, "on_boundary"), 
+                DirichletBC(Zp.sub(0), B_init_bc, "top"),
+                DirichletBC(Zp.sub(0), B_init_bc, "bottom")
+        ]
+    else:
         bcp = [DirichletBC(Zp.sub(0), 0, subdomain) for subdomain in dirichlet_ids]
-    # Write Lagrangian
+        # Write Lagrangian
     L = (
           0.5*inner(B, B)*dx
         - inner(B_init, B)*dx
@@ -221,11 +196,7 @@ def project_initial_conditions(B_init):
             options_prefix="B_init_div_free_projection")
     return zp.subfunctions[0]
 
-if ic == "shear":
-    B_.project(B_init)
-else:    
-    B_.assign(project_initial_conditions(B_init))
-
+B_.assign(project_initial_conditions(B_init))
 z_prev.assign(z)
 
 if output:
@@ -367,7 +338,7 @@ def compute_xi_max(j, B):
     return xi.dat.data.max()
 
 # solver
-time_stepper = build_nonlinear_solver(F, z, bcs, solver_parameters=sp_fs, options_prefix="time_stepper")
+time_stepper = build_nonlinear_solver(F, z, bcs, solver_parameters=sp, options_prefix="time_stepper")
 
 # define files
 data_filename = "output/data.csv"
@@ -416,7 +387,7 @@ beta = 5
 while (float(t) < float(T-dt) + 1.0e-10):
     t.assign(t + dt)
     if mesh.comm.rank == 0:
-        print(RED % f"Solving for t = {float(t):.4f}, dofs = {Z.dim()}, initial condition = {ic}, time discretisation = {time_discr}, dt={float(dt)}, T={T}", flush=True)
+        print(RED % f"Solving for t = {float(t):.4f}, dofs = {Z.dim()}, initial condition = {ic}, time discretisation = {time_discr}, dt={float(dt)}, T={T}, bc={bc}", flush=True)
     
     time_stepper.solve()
     
@@ -434,7 +405,7 @@ while (float(t) < float(T-dt) + 1.0e-10):
     if time_discr == "adaptive":
         E_new = compute_energy(z.sub(0))
         dE = abs(E_new-E_old) / E_old
-        if timestep > 10:
+        if timestep > 20:
             dt.assign(100)
             tau.assign(0.1)
     
