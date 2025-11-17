@@ -9,7 +9,7 @@ import csv
 # parameters 
 output = True
 ic = "E3" # hopf or E3 or shear
-periodic = True
+periodic = False
 time_discr = "adaptive" # uniform or adaptive
 solver_type = "lu"
 
@@ -75,27 +75,7 @@ F = (
     )
 
 # Boundary conditions
-#bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]
-if not periodic: #non-periodic case
-    bcs = [
-    DirichletBC(Z.sub(0), 0, "on_boundary"),
-    DirichletBC(Z.sub(0), 0, "top"),
-    DirichletBC(Z.sub(0), 0, "bottom"),
-    DirichletBC(Z.sub(1), 0, "on_boundary"),
-    DirichletBC(Z.sub(1), 0, "top"),
-    DirichletBC(Z.sub(1), 0, "bottom"),
-    DirichletBC(Z.sub(2), 0, "on_boundary"),
-    DirichletBC(Z.sub(2), 0, "top"),
-    DirichletBC(Z.sub(2), 0, "bottom"),
-    DirichletBC(Z.sub(3), 0, "on_boundary"),
-    DirichletBC(Z.sub(3), 0, "top"),
-    DirichletBC(Z.sub(3), 0, "bottom"),
-    DirichletBC(Z.sub(4), 0, "on_boundary"),
-    DirichletBC(Z.sub(4), 0, "top"),
-    DirichletBC(Z.sub(4), 0, "bottom"),       
-    ]
-else: # periodic case 
-    bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]
+bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]
   
 # Solver parameters for fieldsplit
 if solver_type == "lu":
