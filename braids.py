@@ -234,11 +234,7 @@ def helicity_solver():
     L = inner(B_, curl(v)) * dx
     beta = Constant(0.1)
     Jp_curl = a + inner(beta * u, v) * dx
-    if not periodic: # not periodic 
-        #bcs_curl = [DirichletBC(Vc, 0, subdomain) for subdomain in dirichlet_ids]
-        bcs_curl = DirichletBC(Vc, 0, "on_boundary")
-    else:#periodic case
-        bcs_curl = [DirichletBC(Vc, 0, subdomain) for subdomain in dirichlet_ids]
+    bcs_curl = [DirichletBC(Vc, 0, subdomain) for subdomain in dirichlet_ids]
     rtol = 1E-8
     preconditioner = True
     if preconditioner:
@@ -270,7 +266,7 @@ def riesz_map(functional):
     return function
 
 
-def compute_helicity(B):
+def compute_helicity_energy(B):
     helicity_solver.solve()
     problem = helicity_solver._problem
     if helicity_solver.snes.ksp.getResidualNorm() > 0.01:
@@ -294,22 +290,12 @@ def compute_helicity(B):
     curlA.project(curl(A))
     diff_ = Function(Vd, name="CurlAMinusB")
     diff_.project(B-curlA)
-    VTKFile("output/magnetic_potential.pvd").write(curlA, diff_, A_)
-    if periodic:
-        # general helicity
-        return assemble(inner(A, B + diff_)*dx), diff, diff_
-    else:
-        return assemble(inner(A, B)*dx), diff, diff_
-
-def compute_energy(B, diff_ = None):
-    if periodic:
-        if diff_ is None:
-            return assemble(inner(B, B)*dx)
-        else:
-            return assemble(inner(B - diff_, B - diff_)*dx)
-    else:
-        return assemble(inner(B, B)*dx)
-
+    #VTKFile("output/magnetic_potential.pvd").write(curlA, diff_, A_)
+    if bc=="closed":
+        return assemble(inner(A, B)*dx), diff, diff_, assemble(inner(B, B) * dx)
+    else: 
+        return assemble(inner(A, B + diff_)*dx), diff, diff_, assemble(inner(B - diff_, B-diff_) * dx)
+       
 def compute_Bn(B):
     n = FacetNormal(mesh)
     return assemble(inner(dot(B, n), dot(B, n))*ds_v)
@@ -349,8 +335,7 @@ if mesh.comm.rank == 0:
         writer.writeheader()
 
 # store the initial value
-helicity, diff, diff_= compute_helicity(z.sub(0))
-energy = compute_energy(z.sub(0), diff_)
+helicity, diff, diff_, energy = compute_helicity_energy(z.sub(0))
 normalmg = compute_Bn(z.sub(0))
 divB = compute_divB(z.sub(0))
 velocity = compute_u(z.sub(3))
@@ -377,7 +362,7 @@ if mesh.comm.rank == 0:
 
 
 timestep = 0
-E_old = compute_energy(z_prev.sub(0), diff_=None)
+#E_old = compute_energy(z_prev.sub(0), diff_)
 dt_max = 1
 dt_min = 1e-3
 tol_dt = 1e-6
@@ -392,8 +377,7 @@ while (float(t) < float(T-dt) + 1.0e-10):
     time_stepper.solve()
     
     # monitor
-    helicity, diff, diff_= compute_helicity(z.sub(0))
-    energy = compute_energy(z.sub(0), diff_)
+    helicity, diff, diff_, energy= compute_helicity_energy(z.sub(0))
     normalmg = compute_Bn(z.sub(0))
     divB = compute_divB(z.sub(0))
     velocity = compute_u(z.sub(3))
@@ -403,8 +387,8 @@ while (float(t) < float(T-dt) + 1.0e-10):
 
 
     if time_discr == "adaptive":
-        E_new = compute_energy(z.sub(0))
-        dE = abs(E_new-E_old) / E_old
+        #E_new = compute_energy(z.sub(0), diff)
+        #dE = abs(E_new-E_old) / E_old
         if timestep > 20:
             dt.assign(100)
             tau.assign(0.1)
