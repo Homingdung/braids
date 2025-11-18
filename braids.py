@@ -12,7 +12,7 @@ ic = "E3" # hopf or E3
 # closed: periodic = False, closed = True
 # periodic: periodic = True, closed = True
 # line-tied: periodic = False, closed = False
-bc = "line-tied"
+bc = "closed"
 
 if bc == "line-tied":
     periodic = False
@@ -45,7 +45,7 @@ else:
 order = 1  # polynomial degree
 tau = Constant(1)
 t = Constant(0)
-dt = Constant(1)
+dt = Constant(0.1)
 T = 10000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
@@ -135,13 +135,14 @@ elif ic == "E3":
     B_z = B_0
     B_x = 0
     B_y = 0
+    # background magnetic field
+    B_b = as_vector([0, 0, B_0])
     for i in range(6):
         coeff = exp((-(X0-x_c[i])**2/(a**2)) - ((Y0 - y_c)**2/(a**2)) - ((Z0 - z_c[i])**2/(l**2))) 
         B_x += coeff * ((2 * k * B_0/a) * (-(Y0-y_c)))
         B_y += coeff * ((2 * k * B_0/a) * ((X0-x_c[i])))
 
-    B_init = as_vector([B_x, B_y, B_z])
-
+    B_init = as_vector([B_x, B_y, B_z]) - B_b
 
 (B_, j_, H_, u_, E_) = z.subfunctions
 B_.rename("MagneticField")
@@ -201,6 +202,7 @@ z_prev.assign(z)
 
 if output:
     pvd = VTKFile("output/parker.pvd")
+    B_.project(z.sub(0) + B_b)
     pvd.write(*z.subfunctions, time=float(t))
 
 def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, options_prefix=None):
@@ -363,10 +365,6 @@ if mesh.comm.rank == 0:
 
 timestep = 0
 #E_old = compute_energy(z_prev.sub(0), diff_)
-dt_max = 1
-dt_min = 1e-3
-tol_dt = 1e-6
-beta = 5
 
 
 while (float(t) < float(T-dt) + 1.0e-10):
@@ -412,7 +410,8 @@ while (float(t) < float(T-dt) + 1.0e-10):
 
     if output:
         if timestep % 10 == 0:
-            pvd.write(*z.subfunctions, time=float(t))
+            B_.project(z.sub(0) + B_b)
+            pvd.write(*z.subfunctions,time=float(t))
     timestep += 1
     z_prev.assign(z)
 
