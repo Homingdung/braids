@@ -33,7 +33,7 @@ if ic == "hopf":
     Nx, Ny, Nz = 8, 8, 20
 elif ic == "E3":
     Lx, Ly, Lz = 8, 8, 48
-    Nx, Ny, Nz = 8, 8, 20
+    Nx, Ny, Nz = 4, 4, 20
 
 
 if periodic:
@@ -46,7 +46,7 @@ order = 1  # polynomial degree
 tau = Constant(1)
 t = Constant(0)
 dt = Constant(0.1)
-T = 10000
+T = 1000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
@@ -85,7 +85,7 @@ F = (
     - inner(cross(Et, H_avg), u) * dx
     + inner(E_avg, Et) * dx
     + inner(u_avg, ut) * dx
-    - tau*inner(cross(j_avg, H_avg)/(dot(Bp, Bp)+1e-5), ut) * dx
+    - tau * inner(cross(j_avg, H_avg)/(dot(Bp, Bp)+1e-5), ut) * dx
     + inner(H_avg, Ht) * dx
     - inner(B_avg, Ht) * dx
     )
@@ -390,7 +390,7 @@ while (float(t) < float(T-dt) + 1.0e-10):
     if time_discr == "adaptive":
         #E_new = compute_energy(z.sub(0), diff)
         #dE = abs(E_new-E_old) / E_old
-        if timestep > 20:
+        if timestep > 30:
             dt.assign(100)
             tau.assign(0.1)
     
@@ -412,10 +412,11 @@ while (float(t) < float(T-dt) + 1.0e-10):
             print(f"{row}")
 
     if output:
-        if timestep % 10 == 0:
-            B_recover.project(z.sub(0) + B_b)
+        #if timestep % 10 == 0:
+        if ic == "E3" and bc == "closed":
             pvd.write(*z.subfunctions,time=float(t))
-            pvd1.write(B_recover,time=float(t))
+            B_recover.project(z.sub(0) + B_b)
+            pvd1.write(B_recover, time=float(t))
     timestep += 1
     z_prev.assign(z)
 

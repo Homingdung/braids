@@ -33,7 +33,7 @@ if ic == "hopf":
     Nx, Ny, Nz = 8, 8, 20
 elif ic == "E3":
     Lx, Ly, Lz = 8, 8, 48
-    Nx, Ny, Nz = 8, 8, 20
+    Nx, Ny, Nz = 4, 4, 20
 
 
 if periodic:
