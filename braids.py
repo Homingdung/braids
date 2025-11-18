@@ -33,7 +33,7 @@ if ic == "hopf":
     Nx, Ny, Nz = 8, 8, 20
 elif ic == "E3":
     Lx, Ly, Lz = 8, 8, 48
-    Nx, Ny, Nz = 4, 4, 20
+    Nx, Ny, Nz = 4, 4, 24
 
 
 if periodic:
@@ -369,8 +369,11 @@ if mesh.comm.rank == 0:
 timestep = 0
 #E_old = compute_energy(z_prev.sub(0), diff_)
 
-
-while (float(t) < float(T-dt) + 1.0e-10):
+while (float(t) < float(T) + 1.0e-10):
+    if float(t) + float(dt) > float(T):
+        dt.assign(T - float(t))
+    if float(dt) <=1e-14:
+        break
     t.assign(t + dt)
     if mesh.comm.rank == 0:
         print(RED % f"Solving for t = {float(t):.4f}, dofs = {Z.dim()}, initial condition = {ic}, time discretisation = {time_discr}, dt={float(dt)}, T={T}, bc={bc}", flush=True)
@@ -390,7 +393,7 @@ while (float(t) < float(T-dt) + 1.0e-10):
     if time_discr == "adaptive":
         #E_new = compute_energy(z.sub(0), diff)
         #dE = abs(E_new-E_old) / E_old
-        if timestep > 30:
+        if timestep > 50:
             dt.assign(100)
             tau.assign(0.1)
     

@@ -33,7 +33,7 @@ if ic == "hopf":
     Nx, Ny, Nz = 8, 8, 20
 elif ic == "E3":
     Lx, Ly, Lz = 8, 8, 48
-    Nx, Ny, Nz = 4, 4, 20
+    Nx, Ny, Nz = 4, 4, 24
 
 
 if periodic:
@@ -46,7 +46,7 @@ order = 1  # polynomial degree
 tau = Constant(1)
 t = Constant(0)
 dt = Constant(0.1)
-T = 10000
+T = 1000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
@@ -376,7 +376,11 @@ timestep = 0
 #E_old = compute_energy(z_prev.sub(0), diff_)
 
 
-while (float(t) < float(T-dt) + 1.0e-10):
+while (float(t) < float(T) + 1.0e-10):
+    if float(t) + float(dt) > float(T):
+        dt.assign(T - t)
+    if float(dt)<=1e-14:
+        break
     t.assign(t + dt)
     if mesh.comm.rank == 0:
         print(RED % f"Solving for t = {float(t):.4f}, dofs = {Z.dim()}, initial condition = {ic}, time discretisation = {time_discr}, dt={float(dt)}, T={T}, bc={bc}", flush=True)
@@ -388,10 +392,11 @@ while (float(t) < float(T-dt) + 1.0e-10):
     normalmg = compute_Bn(z.sub(0))
     divB = compute_divB(z.sub(0))
 
+
     if time_discr == "adaptive":
         #E_new = compute_energy(z.sub(0), diff)
         #dE = abs(E_new-E_old) / E_old
-        if timestep > 20:
+        if timestep > 50:
             dt.assign(100)
             tau.assign(0.1)
     
@@ -416,6 +421,7 @@ while (float(t) < float(T-dt) + 1.0e-10):
             pvd1.write(B_recover, time=float(t))
     timestep += 1
     z_prev.assign(z)
+
 
 
 
