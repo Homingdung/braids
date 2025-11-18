@@ -8,7 +8,7 @@ import csv
 
 # parameters 
 output = True
-ic = "E3" # hopf or E3 
+ic = "hopf" # hopf or E3 
 # closed: periodic = False, closed = True
 # periodic: periodic = True, closed = True
 # line-tied: periodic = False, closed = False
@@ -30,7 +30,7 @@ time_discr = "adaptive" # uniform or adaptive
 
 if ic == "hopf":
     Lx, Ly, Lz = 8, 8, 20
-    Nx, Ny, Nz = 8, 8, 20
+    Nx, Ny, Nz = 4, 4, 10
 elif ic == "E3":
     Lx, Ly, Lz = 8, 8, 48
     Nx, Ny, Nz = 4, 4, 24
@@ -69,10 +69,6 @@ z = Function(Z)
 
 z_prev = Function(Z)
 (Bp, jp, Ap, up, Ep,lmbda_ep, lmbda_mp) = split(z_prev)
-B_avg = (B + Bp)/2
-E_avg = E
-j_avg = j
-u_avg = u
 
 def form_energy(B):
     return dot(B, B)
@@ -224,10 +220,11 @@ def project_initial_conditions(B_init):
 B_recover = Function(Vd, name="RecoverdMagneticField")
 if output:
     pvd = VTKFile("output/parker.pvd")
-    pvd1 = VTKFile("output/recover.pvd")
-    B_recover.project(z.sub(0) + B_b)
     pvd.write(*z.subfunctions, time=float(t))
-    pvd1.write(B_recover, time=float(t))
+    if ic == "E3" and bc == "closed":
+        pvd1 = VTKFile("output/recover.pvd")
+        B_recover.project(z.sub(0) + B_b)
+        pvd1.write(B_recover, time=float(t))
 
 def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, options_prefix=None):
     problem = LinearVariationalProblem(a, L, u_sol, bcs=bcs, aP=aP)
@@ -337,7 +334,7 @@ def compute_Bn(B):
     return assemble(inner(dot(B, n), dot(B, n))*ds_v)
 
 def compute_divB(B):
-    return assemble(inner(div(B), div(B))*dx)
+    return norm(div(B), "L2")
 
 def compute_u(u):
     return norm(u, "L2")
@@ -373,9 +370,6 @@ if mesh.comm.rank == 0:
 
 
 timestep = 0
-#E_old = compute_energy(z_prev.sub(0), diff_)
-
-
 while (float(t) < float(T) + 1.0e-10):
     if float(t) + float(dt) > float(T):
         dt.assign(T - t)
@@ -396,7 +390,7 @@ while (float(t) < float(T) + 1.0e-10):
     if time_discr == "adaptive":
         #E_new = compute_energy(z.sub(0), diff)
         #dE = abs(E_new-E_old) / E_old
-        if timestep > 50:
+        if timestep > 100:
             dt.assign(100)
             tau.assign(0.1)
     
@@ -415,8 +409,8 @@ while (float(t) < float(T) + 1.0e-10):
 
     if output:
         #if timestep % 10 == 0:
+        pvd.write(*z.subfunctions,time=float(t))
         if ic == "E3" and bc == "closed":
-            pvd.write(*z.subfunctions,time=float(t))
             B_recover.project(z.sub(0) + B_b)
             pvd1.write(B_recover, time=float(t))
     timestep += 1
