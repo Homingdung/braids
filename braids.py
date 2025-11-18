@@ -200,10 +200,13 @@ def project_initial_conditions(B_init):
 B_.assign(project_initial_conditions(B_init))
 z_prev.assign(z)
 
+B_recover = Function(Vd, name="RecoveredMagneticField")
 if output:
     pvd = VTKFile("output/parker.pvd")
-    B_.project(z.sub(0) + B_b)
+    pvd1 = VTKFile("output/recover.pvd")
+    B_recover.project(z.sub(0) + B_b)
     pvd.write(*z.subfunctions, time=float(t))
+    pvd1.write(B_recover, time=float(t))
 
 def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, options_prefix=None):
     problem = LinearVariationalProblem(a, L, u_sol, bcs=bcs, aP=aP)
@@ -410,8 +413,9 @@ while (float(t) < float(T-dt) + 1.0e-10):
 
     if output:
         if timestep % 10 == 0:
-            B_.project(z.sub(0) + B_b)
+            B_recover.project(z.sub(0) + B_b)
             pvd.write(*z.subfunctions,time=float(t))
+            pvd1.write(B_recover,time=float(t))
     timestep += 1
     z_prev.assign(z)
 
