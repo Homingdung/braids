@@ -84,6 +84,7 @@ def form_helicity(A, B):
     else:
         return dot(A, B)
 
+
 F = (
         inner((B - Bp)/dt, Bt) * dx
     + inner(curl(E), Bt) * dx
