@@ -44,7 +44,7 @@ else:
 order = 1  # polynomial degree
 tau = Constant(1)
 t = Constant(0)
-dt = Constant(1)
+dt = Constant(1) # E3 uses dt = 0.1, hopf can use 1
 T = 10000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
@@ -285,7 +285,6 @@ def form_helicity(A, B):
 B_avg = B
 #B_avg = (B + Bp)/2
 #A_avg = (A + Ap)/2
-eps = as_vector([0, 0, Constant(1e-9)])
 
 F = (
 #inner((B - Bp)/dt, Bt) * dx
