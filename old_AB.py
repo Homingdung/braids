@@ -4,103 +4,59 @@ import csv
 import os
 import sys
 
-# ---------------------------
-# User configuration (top)
-# ---------------------------
+# parameters 
+output = True
+ic = "hopf" # hopf or E3 
+# closed: periodic = False, closed = True
+# periodic: periodic = True, closed = True
+# line-tied: periodic = False, closed = False
+bc = "closed"
 
-# Choose initial condition: "hopf" or "E3" or "iso"
-IC_CHOICE = "hopf" 
+if bc == "line-tied":
+    periodic = False
+    closed = False
 
-# Domain and mesh parameters: choose sizes and resolutions depending on IC
-if IC_CHOICE.lower() == "hopf":
-    # Hopf fibre
-    Lx, Ly, Lz = 4, 4, 10
-elif IC_CHOICE.lower() == "e3":
-    # E3 field
-    Lx, Ly, Lz = 4, 4, 48
-elif IC_CHOICE.lower() == "iso":
-    # IsoHelix
+elif bc == "closed":
+    periodic = False
+    closed = True
+
+elif bc == "periodic":
+    periodic = True # no top and bottom label
+    closed = True
+
+time_discr = "adaptive" # uniform or adaptive
+
+if ic == "hopf":
     Lx, Ly, Lz = 8, 8, 20
+    Nx, Ny, Nz = 4, 4, 10
+elif ic == "E3":
+    Lx, Ly, Lz = 8, 8, 48
+    Nx, Ny, Nz = 4, 4, 24
 
-elif IC_CHOICE.lower() == "hesse":
-    Lx, Ly, Lz = 40, 40, 40
 
-else:
-    raise ValueError("Unknown IC_CHOICE: %r" % IC_CHOICE)
-
-# Domain / mesh parameters
-periodic = False
-closed = True # closed domain means B\cdot n = 0 on each faces
-# Polynomial degree
-POLY_DEGREE = 1
-
-# Time-stepping
-DT = 1.0
-T_FINAL = 10000
-TAU = 100
-
-# Output / logging
-OUTPUT_DIR = "output"
-DATA_FILENAME = "output/data.csv"
-PVD_FILENAME = os.path.join(OUTPUT_DIR, "parker.pvd")
-
-# Boundary identifiers used where DirichletBC expects names.
-# For periodic True, only "on_boundary" is meaningful here.
-# For non-periodic, we'll include "top" and "bottom" explicitly.
 if periodic:
-    DIRICHLET_IDS = ("on_boundary",)
+    dirichlet_ids = ("on_boundary",)
 else:
-    DIRICHLET_IDS = ("on_boundary", "top", "bottom")
-
-# Solver parameter snippets can be placed here if you want to tweak later
-# e.g. PROJ_SOLVER_PARAMS = {...}
-
-# ---------------------------
-# End of user configuration
-# ---------------------------
+    dirichlet_ids = ("on_boundary", "top", "bottom")
 
 
-# ---------------------------
-# Utility: create mesh & coordinate shift
-# ---------------------------
-def create_mesh(Lx, Ly, Lz, periodic):
-    """
-    Build a quadrilateral base mesh with (Nx,Ny) cells on (Lx,Ly),
-    then extrude vertically with Nz layers to height Lz.
+order = 1  # polynomial degree
+tau = Constant(1)
+t = Constant(0)
+dt = Constant(1)
+T = 10000
 
-    Returns the extruded mesh, centered around (0,0,0).
-    """
-    # RectangleMesh signature: RectangleMesh(nx, ny, Lx, Ly, quadrilateral=True)
-    Nx = 4
-    Ny = 4
-    base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
+base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
+mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
+mesh.coordinates.dat.data[:, 0] -= Lx/2
+mesh.coordinates.dat.data[:, 1] -= Ly/2
+mesh.coordinates.dat.data[:, 2] -= Lz/2
 
-    # Extrude: ExtrudedMesh(base_mesh, layers, height, periodic=...)
-    mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
-
-    # center coordinates so the domain is [-Lx/2, Lx/2] x [-Ly/2, Ly/2] x [-Lz/2, Lz/2]
-    # hesse, the domain is [-20, 20] x [-20, 20] x [0, 40]
-
-    mesh.coordinates.dat.data[:, 0] -= Lx/2
-    mesh.coordinates.dat.data[:, 1] -= Ly/2
-    if IC_CHOICE.lower() != "hesse":
-        mesh.coordinates.dat.data[:, 2] -= Lz/2
-    
-    return mesh
-
-
-mesh = create_mesh(Lx, Ly, Lz, periodic)
-x, y, z0 = X = SpatialCoordinate(mesh)
-
-# ---------------------------
-# Function spaces
-# ---------------------------
-k = POLY_DEGREE
-Vg = VectorFunctionSpace(mesh, "Q", k)
-Vg_ = FunctionSpace(mesh, "Q", k)
-Vc = FunctionSpace(mesh, "NCE", k)
-Vd = FunctionSpace(mesh, "NCF", k)
-Vn = FunctionSpace(mesh, "DQ", k-1)
+Vg = VectorFunctionSpace(mesh, "Q", order)
+Vg_ = FunctionSpace(mesh, "Q", order)
+Vc = FunctionSpace(mesh, "NCE", order)
+Vd = FunctionSpace(mesh, "NCF", order)
+Vn = FunctionSpace(mesh, "DQ", order-1)
 VR = FunctionSpace(mesh, "R", 0)
 
 # Mixed unknowns: [B, u, A, E, lmbda_e, lmbda_m]
@@ -112,6 +68,39 @@ z_test = TestFunction(Z)
 (Bt, ut, At, Et, jt, lmbda_et, lmbda_mt) = split(z_test)
 (Bp, up, Ap, Ep, jp, lmbda_ep, lmbda_mp) = split(z_prev)
 
+(X0, Y0, Z0) = x = SpatialCoordinate(mesh)
+
+# Hopf fibre
+if ic == "hopf":
+    w1 = 3
+    w2 = 2
+    s = 1
+    deno = 1 + dot(x, x)
+    coeff = 4*sqrt(s)/((pi * deno * deno * deno)*sqrt(w1**2+w2**2))
+    B_init = as_vector([coeff*2*(w2*Y0-w1*X0*Z0), -coeff*2*(w2*X0+w1*Y0*Z0), coeff*w1*(-1+X0**2+Y0**2-Z0**2)])
+
+elif ic == "E3":
+    x_c = [1, -1, 1, -1, 1, -1]
+    y_c = 0
+    z_c = [-20, -12, -4, 4, 12, 20]
+    a = sqrt(2)
+    # strength of twist
+    k = 5
+    l = 2
+    B_0 = 1
+
+    B_z = B_0
+    B_x = 0
+    B_y = 0
+    # background magnetic field
+    B_b = as_vector([0, 0, B_0])
+    for i in range(6):
+        coeff = exp((-(X0-x_c[i])**2/(a**2)) - ((Y0 - y_c)**2/(a**2)) - ((Z0 - z_c[i])**2/(l**2))) 
+        B_x += coeff * ((2 * k * B_0/a) * (-(Y0-y_c)))
+        B_y += coeff * ((2 * k * B_0/a) * ((X0-x_c[i])))
+
+    B_init = as_vector([B_x, B_y, B_z]) - B_b
+
 # Convenient references to subfunctions
 (B_, u_, A_, E_, j_, lmbda_e_, lmbda_m_) = z.subfunctions
 B_.rename("MagneticField")
@@ -120,126 +109,15 @@ u_.rename("Velocity")
 A_.rename("MagneticPotential")
 j_.rename("Current")
 
-# ---------------------------
-# Initial condition constructors
-# ---------------------------
-def make_B_init_hopf(X):
-    # Hopf initial field (your original expression)
-    x, y, z0 = X
-    w1 = 3
-    w2 = 2
-    s = 1
-    deno = 1 + dot(X, X)
-    coeff = 4*sqrt(s)/((pi * deno * deno * deno)*sqrt(w1**2+w2**2))
-    B_init = as_vector([
-        coeff*2*(w2*y-w1*x*z0),
-        -coeff*2*(w2*x+w1*y*z0),
-        coeff*w1*(-1+x**2+y**2-z0**2)
-    ])
-    return B_init
 
-def make_B_init_E3(X):
-    # E3 field (your original multipole/twisted tubes)
-    x, y, z0 = X
-    x_c = [1, -1, 1, -1, 1, -1]
-    y_c = 0
-    z_c = [-20, -12, -4, 4, 12, 20]
-    a = sqrt(2.0)
-    k_twist = 1.0
-    l = 2.0
-    R = FunctionSpace(mesh, "R", 0)
-    zero = Function(R).assign(0)
-    B_0 = 1 # change it to zeor, if you want remove the background magnetic field
-    B_x = 0
-    B_y = 0
-    B_z = B_0
-    for i in range(6):
-        coeff = exp((-(x-x_c[i])**2/a**2) - ((y - y_c)**2/a**2) - ((z0 - z_c[i])**2/l**2))
-        B_x = B_x + coeff * (2 * k_twist * B_0/a * (-(y-y_c)))
-        B_y = B_y + coeff * (2 * k_twist * B_0/a * ((x-x_c[i])))
-    B_init = as_vector([B_x, B_y, B_z])
-    return B_init
-
-def make_B_init_iso(X):
-    #IsoHelix with phi = pi from https://doi.org/10.1137/140967404
-    x, y, z0 = X
-    B0 = 1
-    ar = sqrt(2)
-    az = 2
-    phi = pi
-    (X1, Y1, Z1) = SpatialCoordinate(mesh)
-    coeff = 2*B0*z0/az**2 * exp(-(x**2 + y**2)/ar**2 - z0**2/az**2)
-
-    B_init = as_vector([coeff * phi * y,
-                       -coeff * phi * x,
-                       B0])
-    return B_init
-
-def make_B_init_hesse(X):
-    x, y, z0 = X
-    t = 2
-    Bx = -2
-    By = -z0 - t*(1 - z0**2)/(1 + z0**2/25)**2/(1 + x**2/25)
-    Bz =y
-    B_init = as_vector([Bx, By, Bz])
-    
-    return B_init
-
-
-def make_B_init(choice):
-    if choice.lower() == "hopf":
-        return make_B_init_hopf(X)
-
-    elif choice.lower() == "e3" or choice.lower() == "E3".lower():
-        return make_B_init_E3(X)
-
-    elif choice.lower() == "iso" or choice.lower() == "iso".lower():
-        return make_B_init_iso(X)
-    
-    elif choice.lower() == "hesse" or choice.lower() == "hesse".lower():
-        return make_B_init_hesse(X)
-
-    else:
-        raise ValueError("Unknown IC choice: %r" % choice)
-
-# Build the selected B_init (UFL expression)
-B_init_expr = make_B_init(IC_CHOICE)
-# boundary value for projection
-
-if closed:
-    B_init_bc_t = 0
-    B_init_bc_b = 0
-else:
-    B_init_bc_t = as_vector([0, 0, 1])
-    B_init_bc_b = as_vector([0, 0, 1])
-# ---------------------------
-# Helper: build linear / nonlinear solvers (kept generic)
-# ---------------------------
-def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, options_prefix=None):
-    problem = LinearVariationalProblem(a, L, u_sol, bcs=bcs, aP=aP)
-    solver = LinearVariationalSolver(problem,
-                                     solver_parameters=solver_parameters,
-                                     options_prefix=options_prefix)
-    return solver
-
-def build_nonlinear_solver(F, z_sol, bcs, Jp=None, solver_parameters = None, options_prefix=None):
-    problem = NonlinearVariationalProblem(F, z_sol, bcs, Jp=Jp)
-    solver = NonlinearVariationalSolver(problem,
-                solver_parameters=solver_parameters,
-                options_prefix=options_prefix)
-    return solver
-
-# ---------------------------
-# Project initial B to be divergence-free and satisfy BCs
-# ---------------------------
-def project_initial_conditions(B_init_expr):
+def project_initial_conditions(B_init):
     Zp = MixedFunctionSpace([Vd, Vn])
     zp = Function(Zp)
     (Bp_proj, p) = split(zp)
     test_B, test_p = TestFunctions(Zp)
     
     # not bc for p
-    bcs_proj = [DirichletBC(Zp.sub(0), 0, sub) for sub in DIRICHLET_IDS]
+    bcs_proj = [DirichletBC(Zp.sub(0), 0, sub) for sub in dirichlet_ids]
 #if not closed:
 #        bcs_proj += [
 #                     DirichletBC(Zp.sub(0), B_init_bc_t, "top"),
@@ -248,7 +126,7 @@ def project_initial_conditions(B_init_expr):
 
     L = (
         0.5*inner(Bp_proj, Bp_proj)*dx
-        - inner(B_init_expr, Bp_proj)*dx
+        - inner(B_init, Bp_proj)*dx
         - inner(p, div(Bp_proj))*dx
     )
     Fp = derivative(L, zp, TestFunction(Zp))
@@ -275,9 +153,30 @@ def project_initial_conditions(B_init_expr):
           options_prefix="B_init_div_free_projection")
     return zp.subfunctions[0]  # return projected B
 
-# ---------------------------
-# Helicity / magnetic potential solver utilities
-# ---------------------------
+B_recover = Function(Vd, name="RecoverdMagneticField")
+if output:
+    pvd = VTKFile("output/parker.pvd")
+    pvd.write(*z.subfunctions, time=float(t))
+    if ic == "E3" and bc == "closed":
+        pvd1 = VTKFile("output/recover.pvd")
+        B_recover.project(z.sub(0) + B_b)
+        pvd1.write(B_recover, time=float(t))
+
+def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, options_prefix=None):
+    problem = LinearVariationalProblem(a, L, u_sol, bcs=bcs, aP=aP)
+    solver = LinearVariationalSolver(problem,
+                                     solver_parameters=solver_parameters,
+                                     options_prefix=options_prefix)
+    return solver
+
+def build_nonlinear_solver(F, z_sol, bcs, Jp=None, solver_parameters = None, options_prefix=None):
+    problem = NonlinearVariationalProblem(F, z_sol, bcs, Jp=Jp)
+    solver = NonlinearVariationalSolver(problem,
+                solver_parameters=solver_parameters,
+                options_prefix=options_prefix)
+    return solver
+
+
 def build_helicity_solver():
     # Solve curl-curl u = curl^{-1} B  (weak: curl(u), curl(v) = <B, curl(v)> )
     u = TrialFunction(Vc)
@@ -285,14 +184,14 @@ def build_helicity_solver():
     u_sol = Function(Vc)
 
     a = inner(curl(u), curl(v)) * dx
-    B_proj = project_initial_conditions(B_init_expr)
+    B_proj = project_initial_conditions(B_init)
     L = inner(B_proj, curl(v)) * dx
 
     # small regularization for kernel
     beta = Constant(0.1)
     Jp_curl = a + inner(beta * u, v) * dx
 
-    bcs_curl = [DirichletBC(Vc, 0, sub) for sub in DIRICHLET_IDS]
+    bcs_curl = [DirichletBC(Vc, 0, sub) for sub in dirichlet_ids]
 
     sparams = {
         "snes_type": "ksponly",
@@ -356,7 +255,7 @@ def potential_solver_direct(B):
            "ksp_type":"gmres",
            "pc_type": "ilu",
     }
-    bcs_curl = [DirichletBC(Vc, 0, sub) for sub in DIRICHLET_IDS]
+    bcs_curl = [DirichletBC(Vc, 0, sub) for sub in dirichlet_ids]
     solver = build_nonlinear_solver(F_curl, Afunc, bcs_curl, solver_parameters = sp_helicity, options_prefix="solver_curlcurl")
     solver.solve()
     return Afunc
@@ -364,18 +263,10 @@ def potential_solver_direct(B):
 # ---------------------------
 # Initialize z_prev: project B and compute A at t=0
 # ---------------------------
-proj_B0 = project_initial_conditions(B_init_expr)
+proj_B0 = project_initial_conditions(B_init)
 z_prev.sub(0).project(proj_B0)
 z_prev.sub(2).project(compute_potential(proj_B0))
 z.assign(z_prev)  # initialize current solution
-
-# ---------------------------
-# Time-discrete weak form (as in your original code)
-# ---------------------------
-dt = Constant(DT)
-t = Constant(0.0)
-tau = Constant(TAU)
-
 
 def form_energy(B):
     return dot(B, B)
@@ -422,7 +313,7 @@ F = (
 )
 
 # Build BCs for the full mixed system Z
-bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)-2) for subdomain in DIRICHLET_IDS]
+bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)-2) for subdomain in dirichlet_ids]
 #if not closed:
 #bcs += [DirichletBC(Z.sub(0), B_init_bc_t, "top"),
 #           DirichletBC(Z.sub(0), B_init_bc_b, "bottom")]
@@ -435,37 +326,9 @@ lu = {
     "pc_factor_mat_solver_type":"mumps"
 }
 
-fs = {
-    "mat_type": "matfree",
-    "snes_monitor": None, 
-    "ksp_type": "fgmres",
-    "ksp_monitor": None,
-    "pc_type": "fieldsplit",
-    "pc_fieldsplit_type": "schur",
-    "pc_fieldsplit_schur_fact_type": "full",
-    "pc_fieldsplit_0_fields": "0, 1, 2, 3, 4",
-    "pc_fieldsplit_1_fields": "5, 6",
-    "fieldsplit_0": {
-        "ksp_type": "preonly",
-        "pc_type": "python",
-#"ksp_monitor": None,
-        "pc_python_type": "firedrake.AssembledPC",
-        "assembled_pc_type": "lu",
-        "assembled_pc_factor_mat_solver_type": "mumps",
-    },
-    "fieldsplit_1": {
-        "ksp_type": "gmres",
-#"ksp_monitor": None,
-        "pc_type": "none",
-        "ksp_max_it": 2, 
-        "ksp_convergence_test": "skip",
-
-    },
-
-}
 sp = None
 pb = NonlinearVariationalProblem(F, z, bcs=bcs)
-solver = NonlinearVariationalSolver(pb, solver_parameters = sp)
+time_stepper = NonlinearVariationalSolver(pb, solver_parameters = sp)
 
 # ---------------------------
 # Diagnostics: helicity, divB, energy
@@ -492,20 +355,13 @@ def compute_energy(B_func, A_func):
     else:
         return assemble(inner(B_func, B_func) * dx)
 
-# ---------------------------
-# Prepare output directory and CSV/log file
-# ---------------------------
-pvd = VTKFile(PVD_FILENAME)
-
-pvd.write(*z.subfunctions, time=float(t))
-
-
-fieldnames = ["t", "helicity", "energy", "divB", "j_max", "lambda_max", "xi_max", "beta", "helicity_GV", "helicity_r"]
+# define files
+data_filename = "output/data.csv"
+fieldnames = ["t", "helicity", "energy", "divB"]
 if mesh.comm.rank == 0:
-    with open(DATA_FILENAME, "w", newline='') as f:
+    with open(data_filename, "w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-
 
 # Save t=0 diagnostics
 helicity = compute_helicity(z.sub(2), z.sub(0)) # A, B
@@ -513,76 +369,64 @@ divB = compute_divB(z.sub(0)) # B
 energy = compute_energy(z.sub(0), z.sub(2)) # B , A
 
 # ------------------ Time-stepping loop (keep t, dt as Constant; use floats for control) ------------------
-
-# Python-side variables for loop control and comparison
-t_val = 0.0                       # current physical time (float)
-initial_dt_val = float(DT)        # initial step size
-increase_dt_after = 20            # after how many steps to increase dt
-big_dt_val = 100.0                # larger step size after the threshold
-
-# ensure Firedrake Constants start from consistent values
-t.assign(0.0)
-dt.assign(initial_dt_val)
-
 timestep = 0
 # write the initial fields
 if mesh.comm.rank == 0:
     row = {
-        "t": float(t_val),
+        "t": float(t),
         "helicity": float(helicity),
         "energy": float(energy),
         "divB": float(divB),
     }
-    with open(DATA_FILENAME, "a", newline='') as f:
+    with open(data_filename, "a", newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writerow(row)
+        print(f"{row}")
 
-while t_val < T_FINAL - 1e-12:
-    # determine desired step size (float)
-    desired_dt = initial_dt_val if (timestep <= increase_dt_after) else big_dt_val
-
-    # do not exceed the remaining time to reach T_FINAL
-    remaining = T_FINAL - t_val
-    next_dt = min(desired_dt, remaining)
-
-    # synchronize Firedrake Constant dt with the actual float value
-    dt.assign(next_dt)
-
-    # advance the UFL Constant t to the new physical time
-    t.assign(t_val + next_dt)
-
+while (float(t) < float(T) + 1.0e-10):
+    if float(t) + float(dt) > float(T):
+        dt.assign(T - t)
+    if float(dt)<=1e-14:
+        break
+    t.assign(t + dt)
     if mesh.comm.rank == 0:
-        print(f"[Time] Step {timestep:4d}: advancing t {t_val:.6f} -> {t_val + next_dt:.6f} (dt={next_dt})", flush=True)
+        print(RED % f"Solving for t = {float(t):.4f}, dofs = {Z.dim()}, initial condition = {ic}, time discretisation = {time_discr}, dt={float(dt)}, T={T}, bc={bc}", flush=True)
+    
+    time_stepper.solve()
+    
+    helicity = compute_helicity(z.sub(2), z.sub(0)) # A, B
+    divB = compute_divB(z.sub(0)) # B
+    energy = compute_energy(z.sub(0), z.sub(2)) # B , A
 
-    # solve the nonlinear system
-    solver.solve()
 
-    # update previous solution
-    z_prev.assign(z)
-
-    # update Python-side time tracker
-    t_val += next_dt
-
-    # diagnostics
-    helicity = compute_helicity(z.sub(2), z.sub(0))
-    divB = compute_divB(z.sub(0))
-    energy = compute_energy(z.sub(0), z.sub(2))
-
+    if time_discr == "adaptive":
+        #E_new = compute_energy(z.sub(0), diff)
+        #dE = abs(E_new-E_old) / E_old
+        if timestep > 100:
+            dt.assign(100)
+            tau.assign(0.1)
+    
     if mesh.comm.rank == 0:
         row = {
-        "t": float(t_val),
-        "helicity": float(helicity),
-        "energy": float(energy),
-        "divB": float(divB),
+            "t": float(t),
+            "helicity": float(helicity),
+            "energy": float(energy),
+            "divB": float(divB),
         }
-        with open(DATA_FILENAME, "a", newline='') as f:
+        with open(data_filename, "a", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writerow(row)
-        print(f"[Diagnostics] t={t_val:.6f} helicity={helicity:.6e}, energy={energy:.6e}, divB={divB:.6e}", flush=True)
+            print(f"{row}")
 
-    # write VTK/PVD output (stored in 'output/' folder)
-    pvd.write(*z.subfunctions, time=float(t_val))
+    if output:
+        #if timestep % 10 == 0:
+        pvd.write(*z.subfunctions,time=float(t))
+        if ic == "E3" and bc == "closed":
+            B_recover.project(z.sub(0) + B_b)
+            pvd1.write(B_recover, time=float(t))
     timestep += 1
+    z_prev.assign(z)
 
-# ------------------ End of time-stepping loop ------------------
+
+
 
