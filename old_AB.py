@@ -176,16 +176,38 @@ def build_nonlinear_solver(F, z_sol, bcs, Jp=None, solver_parameters = None, opt
                 options_prefix=options_prefix)
     return solver
 
+def potential_solver_direct(B):
+    """
+    Alternative direct nonlinear solve for curl-curl A = curl^{-1} B (kept as in original)
+    """
+    Afunc = Function(Vc)
+    v = TestFunction(Vc)
+    F_curl  = inner(curl(Afunc), curl(v)) * dx - inner(B, curl(v)) * dx
 
-def build_helicity_solver():
+    sp_helicity = {  
+           "ksp_type":"gmres",
+           "pc_type": "ilu",
+    }
+    bcs_curl = [DirichletBC(Vc, 0, sub) for sub in dirichlet_ids]
+    solver = build_nonlinear_solver(F_curl, Afunc, bcs_curl, solver_parameters = sp_helicity, options_prefix="solver_curlcurl")
+    solver.solve()
+    return Afunc
+
+
+proj_B0 = project_initial_conditions(B_init)
+z_prev.sub(0).project(proj_B0)
+z_prev.sub(2).project(potential_solver_direct(proj_B0))
+z.assign(z_prev)  # initialize current solution
+
+def build_helicity_solver(B):
     # Solve curl-curl u = curl^{-1} B  (weak: curl(u), curl(v) = <B, curl(v)> )
     u = TrialFunction(Vc)
     v = TestFunction(Vc)
     u_sol = Function(Vc)
 
     a = inner(curl(u), curl(v)) * dx
-    B_proj = project_initial_conditions(B_init)
-    L = inner(B_proj, curl(v)) * dx
+    #B_proj = project_initial_conditions(B_init)
+    L = inner(B, curl(v)) * dx
 
     # small regularization for kernel
     beta = Constant(0.1)
@@ -205,7 +227,7 @@ def build_helicity_solver():
     solver = build_linear_solver(a, L, u_sol, bcs_curl, Jp_curl, sparams, options_prefix="helicity")
     return solver
 
-helicity_solver = build_helicity_solver()
+helicity_solver = build_helicity_solver(B)
 
 def riesz_map(functional):
     """
@@ -243,30 +265,6 @@ def compute_potential(B):
     A_.project(A)
     return A_
 
-def potential_solver_direct(B):
-    """
-    Alternative direct nonlinear solve for curl-curl A = curl^{-1} B (kept as in original)
-    """
-    Afunc = Function(Vc)
-    v = TestFunction(Vc)
-    F_curl  = inner(curl(Afunc), curl(v)) * dx - inner(B, curl(v)) * dx
-
-    sp_helicity = {  
-           "ksp_type":"gmres",
-           "pc_type": "ilu",
-    }
-    bcs_curl = [DirichletBC(Vc, 0, sub) for sub in dirichlet_ids]
-    solver = build_nonlinear_solver(F_curl, Afunc, bcs_curl, solver_parameters = sp_helicity, options_prefix="solver_curlcurl")
-    solver.solve()
-    return Afunc
-
-# ---------------------------
-# Initialize z_prev: project B and compute A at t=0
-# ---------------------------
-proj_B0 = project_initial_conditions(B_init)
-z_prev.sub(0).project(proj_B0)
-z_prev.sub(2).project(compute_potential(proj_B0))
-z.assign(z_prev)  # initialize current solution
 
 def form_energy(B):
     return dot(B, B)
