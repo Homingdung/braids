@@ -14,7 +14,7 @@ IC_CHOICE = "hopf"
 # Domain and mesh parameters: choose sizes and resolutions depending on IC
 if IC_CHOICE.lower() == "hopf":
     # Hopf fibre
-    Lx, Ly, Lz = 8, 8, 20
+    Lx, Ly, Lz = 4, 4, 10
 elif IC_CHOICE.lower() == "e3":
     # E3 field
     Lx, Ly, Lz = 4, 4, 48
