@@ -479,7 +479,7 @@ def compute_helicity(A_func, B_func):
         return assemble(inner(A_func, B_func + harmonic) * dx)
     else:
         A = potential_solver_direct(B_func)
-        return assemble(inner(A, B_func) * dx)
+        return assemble(inner(A_func, B_func) * dx)
 
 def compute_divB(B_func):
     return norm(div(B_func), "L2")
