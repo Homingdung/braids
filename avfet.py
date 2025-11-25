@@ -11,15 +11,12 @@ bc = "closed"
 
 if bc == "line-tied":
     periodic = False
-    closed = False
 
 elif bc == "closed":
     periodic = False
-    closed = True
 
 elif bc == "periodic":
     periodic = True # no top and bottom label
-    closed = True
 
 time_discr = "adaptive" # uniform or adaptive
 
@@ -91,7 +88,7 @@ F = (
 B_init_bc = as_vector([0, 0, 1])
 
 bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]
-if not closed:
+if bcs == "line-tied":
     bcs += DirichletBC(Z.sub(0), B_init_bc, "top")
     bcs += DirichletBC(Z.sub(0), B_init_bc, "bottom")
 
@@ -153,7 +150,7 @@ def project_initial_conditions(B_init):
     Zp = MixedFunctionSpace([Vd, Vn])
     zp = Function(Zp)
     (B, p) = split(zp)
-    if not closed:
+    if bcs == "line-tied":
         bcp = [
                 DirichletBC(Zp.sub(0), 0, "on_boundary"), 
                 DirichletBC(Zp.sub(0), B_init_bc, "top"),
