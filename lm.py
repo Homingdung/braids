@@ -254,15 +254,6 @@ def project_initial_conditions(B_init):
           options_prefix="B_init_div_free_projection")
     return zp.subfunctions[0]  # return projected B
 
-B_recover = Function(Vd, name="RecoverdMagneticField")
-if output:
-    pvd = VTKFile("output/parker.pvd")
-    pvd.write(*z.subfunctions, time=float(t))
-    if ic == "E3" and bc == "closed":
-        pvd1 = VTKFile("output/recover.pvd")
-        B_recover.project(z.sub(0) + B_b)
-        pvd1.write(B_recover, time=float(t))
-
 def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, options_prefix=None):
     problem = LinearVariationalProblem(a, L, u_sol, bcs=bcs, aP=aP)
     solver = LinearVariationalSolver(problem,
@@ -299,6 +290,15 @@ proj_B0 = project_initial_conditions(B_init)
 z_prev.sub(0).project(proj_B0)
 z_prev.sub(2).project(potential_solver_direct(proj_B0))
 z.assign(z_prev)  # initialize current solution
+
+B_recover = Function(Vd, name="RecoverdMagneticField")
+if output:
+    pvd = VTKFile("output/parker.pvd")
+    pvd.write(*z.subfunctions, time=float(t))
+    if ic == "E3" and bc == "closed":
+        pvd1 = VTKFile("output/recover.pvd")
+        B_recover.project(z.sub(0) + B_b)
+        pvd1.write(B_recover, time=float(t))
 
 def helicity_solver(B):
     # Solve curl-curl u = curl^{-1} B  (weak: curl(u), curl(v) = <B, curl(v)> )
