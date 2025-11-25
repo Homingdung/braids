@@ -1,17 +1,12 @@
+# avfet method for relaxation 
 from firedrake import *
-from firedrake.petsc import PETSc
-print = PETSc.Sys.Print
-from tabulate import tabulate
-from mpi4py import MPI
-import numpy as np
 import csv
+import os
+import sys
 
 # parameters 
 output = True
 ic = "hopf" # hopf or E3 
-# closed: periodic = False, closed = True
-# periodic: periodic = True, closed = True
-# line-tied: periodic = False, closed = False
 bc = "closed"
 
 if bc == "line-tied":
@@ -46,7 +41,7 @@ order = 1  # polynomial degree
 tau = Constant(1)
 t = Constant(0)
 dt = Constant(0.1)
-T = 1000
+T = 10000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
@@ -60,6 +55,7 @@ Vc = FunctionSpace(mesh, "NCE", order)
 Vd = FunctionSpace(mesh, "NCF", order)
 Vn = FunctionSpace(mesh, "DQ", order-1)
 
+# Mixed unknowns: [B, j, H, u, E]
 Z = MixedFunctionSpace([Vd, Vc, Vc, Vd, Vc])
 z = Function(Z)
 (B , j,  H, u, E) = split(z)
@@ -100,12 +96,12 @@ if not closed:
     bcs += DirichletBC(Z.sub(0), B_init_bc, "bottom")
 
 lu = {
-		"mat_type": "aij",
-		"snes_type": "newtonls",
+	"mat_type": "aij",
+	"snes_type": "newtonls",
         "snes_monitor": None,
         "ksp_monitor": None,
         "ksp_type":"preonly",
-		"pc_type": "lu",
+	"pc_type": "lu",
         "pc_factor_mat_solver_type":"mumps"
 }
 sp = lu
@@ -216,7 +212,6 @@ def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, opt
                                      options_prefix=options_prefix)
     return solver
 
-
 def build_nonlinear_solver(F, z, bcs, Jp=None, solver_parameters = None, options_prefix=None):
     problem = NonlinearVariationalProblem(F, z, bcs, Jp=Jp)
     solver = NonlinearVariationalSolver(problem,
@@ -309,32 +304,12 @@ def compute_Bn(B):
 def compute_divB(B):
     return norm(div(B), "L2")
 
-def compute_u(u):
-    return norm(u, "L2")
-
-def current_parall(j, B):
-    R = FunctionSpace(mesh, "R", 0)
-    J_parallel = Function(R).project(dot(j, B) / sqrt(dot(B, B) + 1e-10))
-    return J_parallel
-
-def compute_j_max(j):
-    j_abs = Function(Vg_).project(sqrt(dot(j, j)))
-    return j_abs.dat.data.max()
-
-def compute_lamb_max(j, B):
-    lamb = Function(Vg_).interpolate(dot(j, B)/dot(B, B))
-    return lamb.dat.data.max()
-
-def compute_xi_max(j, B):
-    xi = Function(Vg_).interpolate(dot(cross(j, B), cross(j, B))/dot(B, B))
-    return xi.dat.data.max()
-
 # solver
 time_stepper = build_nonlinear_solver(F, z, bcs, solver_parameters=sp, options_prefix="time_stepper")
 
 # define files
 data_filename = "output/data.csv"
-fieldnames = ["t", "helicity", "energy", "normalmg", "divB", "velocity", "currentMax", "lambdaMax", "xiMax"]
+fieldnames = ["t", "helicity", "energy", "divB"]
 if mesh.comm.rank == 0:
     with open(data_filename, "w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -342,24 +317,15 @@ if mesh.comm.rank == 0:
 
 # store the initial value
 helicity, diff, diff_, energy = compute_helicity_energy(z.sub(0))
-normalmg = compute_Bn(z.sub(0))
 divB = compute_divB(z.sub(0))
-velocity = compute_u(z.sub(3))
-currentMax = compute_j_max(z.sub(1))
-lambdaMax = compute_lamb_max(z.sub(1), z.sub(0))
-xiMax = compute_xi_max(z.sub(1), z.sub(0))
+
 
 if mesh.comm.rank == 0:
     row = {
         "t": float(t),
         "helicity": float(helicity),
         "energy": float(energy),
-        "normalmg": float(normalmg),
         "divB": float(divB),
-        "velocity": float(velocity),
-        "currentMax": float(currentMax),
-        "lambdaMax": float(lambdaMax), 
-        "xiMax": float(xiMax),
     }
     with open(data_filename, "a", newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -383,17 +349,9 @@ while (float(t) < float(T) + 1.0e-10):
     
     # monitor
     helicity, diff, diff_, energy= compute_helicity_energy(z.sub(0))
-    normalmg = compute_Bn(z.sub(0))
     divB = compute_divB(z.sub(0))
-    velocity = compute_u(z.sub(3))
-    currentMax = compute_j_max(z.sub(1))
-    lambMax = compute_lamb_max(z.sub(1), z.sub(0))
-    xiMax = compute_xi_max(z.sub(1), z.sub(0))
-
 
     if time_discr == "adaptive":
-        #E_new = compute_energy(z.sub(0), diff)
-        #dE = abs(E_new-E_old) / E_old
         if timestep > 100:
             dt.assign(100)
             tau.assign(0.1)
@@ -403,12 +361,7 @@ while (float(t) < float(T) + 1.0e-10):
             "t": float(t),
             "helicity": float(helicity),
             "energy": float(energy),
-            "normalmg": float(normalmg),
             "divB": float(divB),
-            "velocity": float(velocity),
-            "currentMax": float(currentMax),
-            "lambdaMax": float(lambdaMax), 
-            "xiMax": float(xiMax),
         }
         with open(data_filename, "a", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
