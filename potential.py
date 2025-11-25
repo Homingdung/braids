@@ -42,7 +42,7 @@ else:
 
 
 order = 1  # polynomial degree
-tau = Constant(1)
+tau = Constant(10)
 t = Constant(0)
 dt = Constant(1) # E3 uses dt = 0.1, hopf can use 1
 T = 10000
@@ -68,6 +68,19 @@ z_test = TestFunction(Z)
 (B, u, A, E, j, lmbda_e, lmbda_m) = split(z)
 (Bt, ut, At, Et, jt, lmbda_et, lmbda_mt) = split(z_test)
 (Bp, up, Ap, Ep, jp, lmbda_ep, lmbda_mp) = split(z_prev)
+
+
+# single LM weak form
+# Mixed unknowns: [B, u, A, E, lmbda_m]
+# remove the energy law
+Z_s = MixedFunctionSpace([Vd, Vd, Vc, Vc, Vc, VR])
+z_s = Function(Z_s)
+z_s_prev = Function(Z_s)
+z_s_test = TestFunction(Z_s)
+(B_s, u_s, A_s, E_s, j_s, lmbda_m_s) = split(z_s)
+(B_st, u_st, A_st, E_st, j_st, lmbda_m_st) = split(z_s_test)
+(B_sp, u_sp, A_sp, E_sp, j_sp, lmbda_m_sp) = split(z_s_prev)
+
 
 (X0, Y0, Z0) = x = SpatialCoordinate(mesh)
 
@@ -282,10 +295,6 @@ def form_helicity(A, B):
     else:
         return dot(A, B)
 
-B_avg = B
-#B_avg = (B + Bp)/2
-#A_avg = (A + Ap)/2
-
 F = (
 #inner((B - Bp)/dt, Bt) * dx
 #    + inner(curl(E), Bt) * dx
@@ -294,31 +303,51 @@ F = (
     + inner((A-Ap)/dt, At) * dx
     + inner(E, At) * dx
     + 2 * lmbda_m * inner(B, At) * dx # LM for helicity
-    + 2 * lmbda_e * inner(B_avg, curl(At)) * dx # LM for energy
+    + 2 * lmbda_e * inner(B, curl(At)) * dx # LM for energy
 
 
     + inner(E, Et) * dx
-    + inner(cross(u, B_avg), Et) * dx
+    + inner(cross(u, B), Et) * dx
 
     + inner(u, ut) * dx
-    - tau * inner(cross(j, B_avg), ut) * dx
+    - tau * inner(cross(j, B), ut) * dx
     
     + inner(j, jt) * dx
-    - inner(B_avg, curl(jt)) * dx
+    - inner(B, curl(jt)) * dx
 
     # energy law
     + 1/dt * inner(form_energy(B) - form_energy(Bp), lmbda_et) * dx
-    + inner(form_dissipation(B_avg, j), lmbda_et) * dx
+    + inner(form_dissipation(B, j), lmbda_et) * dx
     # helicity 
     + 1/dt * inner(form_helicity(A, B) - form_helicity(Ap, Bp), lmbda_mt) * dx
 )
 
+# single LM
+F_s = (
+      inner(B_s, B_st) * dx 
+    - inner(curl(A_s), B_st) * dx
+    + inner((A_s-A_sp)/dt, A_st) * dx
+    + inner(E_s, A_st) * dx
+    + 2 * lmbda_m_s * inner(B_s, A_st) * dx # LM for helicity
+    
+    + inner(E_s, E_st) * dx
+    + inner(cross(u_s, B_s), E_st) * dx
+
+    + inner(u_s, u_st) * dx
+    - tau * inner(cross(j_s, B_s), u_st) * dx
+    
+    + inner(j_s, j_st) * dx
+    - inner(B_s, curl(j_st)) * dx
+    
+    # helicity 
+    + 1/dt * inner(form_helicity(A_s, B_s) - form_helicity(A_sp, B_sp), lmbda_m_st) * dx
+
+)
+
 # Build BCs for the full mixed system Z
 bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)-2) for subdomain in dirichlet_ids]
-#if not closed:
-#bcs += [DirichletBC(Z.sub(0), B_init_bc_t, "top"),
-#           DirichletBC(Z.sub(0), B_init_bc_b, "bottom")]
-# Nonlinear solver params you used originally
+# boundary condition for single LM
+bcs_s = [DirichletBC(Z_s.sub(index), 0, subdomain) for index in range(len(Z_s)-1) for subdomain in dirichlet_ids]
 lu = {
     "mat_type": "aij",
     "snes_type": "newtonls",
@@ -330,6 +359,10 @@ lu = {
 sp = None
 pb = NonlinearVariationalProblem(F, z, bcs=bcs)
 time_stepper = NonlinearVariationalSolver(pb, solver_parameters = sp)
+
+# solver for single LM
+pb_s = NonlinearVariationalProblem(F_s, z_s, bcs=bcs_s)
+time_stepper_s = NonlinearVariationalSolver(pb_s, solver_parameters = sp)
 
 # ---------------------------
 # Diagnostics: helicity, divB, energy
@@ -384,6 +417,7 @@ if mesh.comm.rank == 0:
         writer.writerow(row)
         print(f"{row}")
 
+delta_energy = 1.0
 while (float(t) < float(T) + 1.0e-10):
     if float(t) + float(dt) > float(T):
         dt.assign(T - t)
@@ -393,16 +427,29 @@ while (float(t) < float(T) + 1.0e-10):
     if mesh.comm.rank == 0:
         print(RED % f"Solving for t = {float(t):.4f}, dofs = {Z.dim()}, initial condition = {ic}, time discretisation = {time_discr}, dt={float(dt)}, T={T}, bc={bc}", flush=True)
     
-    time_stepper.solve()
-    
-    helicity = compute_helicity(z.sub(2), z.sub(0)) # A, B
-    divB = compute_divB(z.sub(0)) # B
-    energy = compute_energy(z.sub(0), z.sub(2)) # B , A
+    if delta_energy > 9e-5:
+        time_stepper.solve()
+        helicity = compute_helicity(z.sub(2), z.sub(0)) # A, B
+        divB = compute_divB(z.sub(0)) # B
+        energy = compute_energy(z.sub(0), z.sub(2)) # B , A
+        delta_energy = 1/float(dt) * (compute_energy(z_prev.sub(0), z_prev.sub(2)) - energy)
+        print(GREEN % f"{delta_energy}")
 
+    else:
+        (B, u, A, E, j, lmbda_e, lmbda_m) = z.subfunctions
+        z_s_prev.sub(0).assign(z.sub(0))
+        z_s_prev.sub(1).assign(z.sub(1))
+        z_s_prev.sub(2).assign(z.sub(2))
+        z_s_prev.sub(3).assign(z.sub(3))
+        z_s_prev.sub(4).assign(z.sub(4))
+        z_s_prev.sub(5).assign(z.sub(6))
+        z_s.assign(z_s_prev)
+        time_stepper_s.solve()
+        helicity = compute_helicity(z_s.sub(2), z_s.sub(0)) # A, B
+        divB = compute_divB(z_s.sub(0)) # B
+        energy = compute_energy(z_s.sub(0), z_s.sub(2)) # B , A
 
     if time_discr == "adaptive":
-        #E_new = compute_energy(z.sub(0), diff)
-        #dE = abs(E_new-E_old) / E_old
         if timestep > 100:
             dt.assign(100)
             tau.assign(0.1)
