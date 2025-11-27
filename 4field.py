@@ -1,4 +1,4 @@
-# Lagrange multiplier for relaxation
+# mixed finite element method
 from firedrake import *
 import csv
 import os
@@ -51,95 +51,42 @@ Vg_ = FunctionSpace(mesh, "Q", order)
 Vc = FunctionSpace(mesh, "NCE", order)
 Vd = FunctionSpace(mesh, "NCF", order)
 Vn = FunctionSpace(mesh, "DQ", order-1)
-VR = FunctionSpace(mesh, "R", 0)
 
-# Mixed unknowns: [B, u, A, E, lmbda_e, lmbda_m]
-Z = MixedFunctionSpace([Vd, Vd, Vc, Vc, Vc, VR, VR])
+# Mixed unknowns: [B, j, H, E]
+Z = MixedFunctionSpace([Vd, Vc, Vc, Vc])
 z = Function(Z)
+(B , j,  H, E) = split(z)
+(Bt, jt, Ht, Et) = split(TestFunction(Z))
+
 z_prev = Function(Z)
-z_test = TestFunction(Z)
-(B, u, A, E, j, lmbda_e, lmbda_m) = split(z)
-(Bt, ut, At, Et, jt, lmbda_et, lmbda_mt) = split(z_test)
-(Bp, up, Ap, Ep, jp, lmbda_ep, lmbda_mp) = split(z_prev)
-
-
-# single LM weak form
-# Mixed unknowns: [B, u, A, E, lmbda_m]
-# remove the energy law
-Z_s = MixedFunctionSpace([Vd, Vd, Vc, Vc, Vc, VR])
-z_s = Function(Z_s)
-z_s_prev = Function(Z_s)
-z_s_test = TestFunction(Z_s)
-(B_s, u_s, A_s, E_s, j_s, lmbda_m_s) = split(z_s)
-(B_st, u_st, A_st, E_st, j_st, lmbda_m_st) = split(z_s_test)
-(B_sp, u_sp, A_sp, E_sp, j_sp, lmbda_m_sp) = split(z_s_prev)
-
-def form_energy(B):
-    return dot(B, B)
-
-def form_dissipation(B, j):
-    return 2 * tau * inner(cross(B, j), cross(B, j)) 
-
-
-def form_helicity(A, B):
-    if periodic:
-        harmonic = Function(Vd)
-        harmonic.project(B - curl(A))
-        return dot(A, B + harmonic)
-    else:
-        return dot(A, B)
+(Bp, jp, Hp, Ep) = split(z_prev)
+B_avg = (B + Bp)/2
+E_avg = E
+#E_avg = (E + Ep)/2
+H_avg = H
+#H_avg = (H + Hp)/2  # or H?
+j_avg = j
+#j_avg = (j + jp)/2  # or j?
 
 F = (
-    inner(B, Bt) * dx 
-    - inner(curl(A), Bt) * dx
-    + inner((A-Ap)/dt, At) * dx
-    + inner(E, At) * dx
-    + 2 * lmbda_m * inner(B, At) * dx # LM for helicity
-    + 2 * lmbda_e * inner(B, curl(At)) * dx # LM for energy
-
-
-    + inner(E, Et) * dx
-    + inner(cross(u, B), Et) * dx
-
-    + inner(u, ut) * dx
-    - tau * inner(cross(j, B), ut) * dx
-    
-    + inner(j, jt) * dx
-    - inner(B, curl(jt)) * dx
-
-    # energy law
-    + 1/dt * inner(form_energy(B) - form_energy(Bp), lmbda_et) * dx
-    + inner(form_dissipation(B, j), lmbda_et) * dx
-    # helicity 
-    + 1/dt * inner(form_helicity(A, B) - form_helicity(Ap, Bp), lmbda_mt) * dx
-)
-
-# single LM
-F_s = (
-      inner(B_s, B_st) * dx 
-    - inner(curl(A_s), B_st) * dx
-    + inner((A_s-A_sp)/dt, A_st) * dx
-    + inner(E_s, A_st) * dx
-    + 2 * lmbda_m_s * inner(B_s, A_st) * dx # LM for helicity
-    
-    + inner(E_s, E_st) * dx
-    + inner(cross(u_s, B_s), E_st) * dx
-
-    + inner(u_s, u_st) * dx
-    - tau * inner(cross(j_s, B_s), u_st) * dx
-    
-    + inner(j_s, j_st) * dx
-    - inner(B_s, curl(j_st)) * dx
-    
-    # helicity 
-    + 1/dt * inner(form_helicity(A_s, B_s) - form_helicity(A_sp, B_sp), lmbda_m_st) * dx
-
+      inner((B-Bp)/dt, Bt) * dx
+    + inner(curl(E_avg), Bt) * dx
+    - inner(B_avg, curl(jt)) * dx
+    + inner(j_avg, jt) * dx
+    + inner(E_avg, Et) * dx
+    + tau * inner(cross(cross(j_avg, H_avg), H_avg)/(dot(Bp, Bp) + 1e-5), Et) * dx
+    + inner(H_avg, Ht) * dx
+    - inner(B_avg, Ht) * dx
 )
 
 # Boundary conditions
-bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)-2) for subdomain in dirichlet_ids]
-# boundary condition for single LM
-bcs_s = [DirichletBC(Z_s.sub(index), 0, subdomain) for index in range(len(Z_s)-1) for subdomain in dirichlet_ids]
+# bcs for top and bottom
+B_init_bc = as_vector([0, 0, 1])
+
+bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]
+if bcs == "line-tied":
+    bcs += DirichletBC(Z.sub(0), B_init_bc, "top")
+    bcs += DirichletBC(Z.sub(0), B_init_bc, "bottom")
 
 lu = {
 	"mat_type": "aij",
@@ -150,7 +97,7 @@ lu = {
 	"pc_type": "lu",
         "pc_factor_mat_solver_type":"mumps"
 }
-sp = None
+sp = lu
        
 
 (X0, Y0, Z0) = x = SpatialCoordinate(mesh)
@@ -186,13 +133,11 @@ elif ic == "E3":
 
     B_init = as_vector([B_x, B_y, B_z]) - B_b
 
-(B_, u_, A_, E_, j_, lmbda_e_, lmbda_m_) = z.subfunctions
+(B_, j_, H_, E_) = z.subfunctions
 B_.rename("MagneticField")
 E_.rename("ElectricField")
-u_.rename("Velocity")
-A_.rename("MagneticPotential")
+H_.rename("HCurlMagneticField")
 j_.rename("Current")
-
 
 def project_initial_conditions(B_init):
     # Need to project the initial conditions
@@ -240,48 +185,10 @@ def project_initial_conditions(B_init):
             options_prefix="B_init_div_free_projection")
     return zp.subfunctions[0]
 
-    solve(Fp == 0, zp, bcs_proj, Jp=Jp, solver_parameters=spp,
-          options_prefix="B_init_div_free_projection")
-    return zp.subfunctions[0]  # return projected B
+B_.assign(project_initial_conditions(B_init))
+z_prev.assign(z)
 
-def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, options_prefix=None):
-    problem = LinearVariationalProblem(a, L, u_sol, bcs=bcs, aP=aP)
-    solver = LinearVariationalSolver(problem,
-                                     solver_parameters=solver_parameters,
-                                     options_prefix=options_prefix)
-    return solver
-
-def build_nonlinear_solver(F, z_sol, bcs, Jp=None, solver_parameters = None, options_prefix=None):
-    problem = NonlinearVariationalProblem(F, z_sol, bcs, Jp=Jp)
-    solver = NonlinearVariationalSolver(problem,
-                solver_parameters=solver_parameters,
-                options_prefix=options_prefix)
-    return solver
-
-def potential_solver_direct(B):
-    """
-    Alternative direct nonlinear solve for curl-curl A = curl^{-1} B (kept as in original)
-    """
-    Afunc = Function(Vc)
-    v = TestFunction(Vc)
-    F_curl  = inner(curl(Afunc), curl(v)) * dx - inner(B, curl(v)) * dx
-
-    sp_helicity = {  
-           "ksp_type":"gmres",
-           "pc_type": "ilu",
-    }
-    bcs_curl = [DirichletBC(Vc, 0, sub) for sub in dirichlet_ids]
-    solver = build_nonlinear_solver(F_curl, Afunc, bcs_curl, solver_parameters = sp_helicity, options_prefix="solver_curlcurl")
-    solver.solve()
-    return Afunc
-
-
-proj_B0 = project_initial_conditions(B_init)
-z_prev.sub(0).project(proj_B0)
-z_prev.sub(2).project(potential_solver_direct(proj_B0))
-z.assign(z_prev)  # initialize current solution
-
-B_recover = Function(Vd, name="RecoverdMagneticField")
+B_recover = Function(Vd, name="RecoveredMagneticField")
 if output:
     pvd = VTKFile("output/parker.pvd")
     pvd.write(*z.subfunctions, time=float(t))
@@ -290,30 +197,60 @@ if output:
         B_recover.project(z.sub(0) + B_b)
         pvd1.write(B_recover, time=float(t))
 
-def helicity_solver(B):
-    # Solve curl-curl u = curl^{-1} B  (weak: curl(u), curl(v) = <B, curl(v)> )
+def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, options_prefix=None):
+    problem = LinearVariationalProblem(a, L, u_sol, bcs=bcs, aP=aP)
+    solver = LinearVariationalSolver(problem,
+                                     solver_parameters=solver_parameters,
+                                     options_prefix=options_prefix)
+    return solver
+
+def build_nonlinear_solver(F, z, bcs, Jp=None, solver_parameters = None, options_prefix=None):
+    problem = NonlinearVariationalProblem(F, z, bcs, Jp=Jp)
+    solver = NonlinearVariationalSolver(problem,
+                solver_parameters=solver_parameters,
+                options_prefix=options_prefix)
+    return solver
+
+
+def helicity_solver():
+    # Spaces for magnetic potential computation
+    # If using periodic boundary conditions, we need to modify
+    # this to account for the harmonic form [0, 0, 1]^T
+    # using Yang's solver
+
     u = TrialFunction(Vc)
     v = TestFunction(Vc)
     u_sol = Function(Vc)
 
+    # weak form of curl-curl problem 
     a = inner(curl(u), curl(v)) * dx
-    L = inner(B, curl(v)) * dx
+    L = inner(B_, curl(v)) * dx
     beta = Constant(0.1)
     Jp_curl = a + inner(beta * u, v) * dx
-    bcs_curl = [DirichletBC(Vc, 0, sub) for sub in dirichlet_ids]
+    bcs_curl = [DirichletBC(Vc, 0, subdomain) for subdomain in dirichlet_ids]
+    rtol = 1E-8
+    preconditioner = True
+    if preconditioner:
+        pc_type = "lu"
+    else:
+        pc_type = "none"
     sparams = {
         "snes_type": "ksponly",
+        # "ksp_type": "lsqr",
         "ksp_type": "minres",
         "ksp_max_it": 1000,
-        "pc_type": "cholesky",
+        "ksp_convergence_test": "skip",
+        #"ksp_monitor": None,
+        "pc_type": pc_type,
         "ksp_norm_type": "preconditioned",
         "ksp_minres_nutol": 1E-8,
-    }
+        }
 
     solver = build_linear_solver(a, L, u_sol, bcs_curl, Jp_curl, sparams, options_prefix="helicity")
     return solver
 
-helicity_solver = helicity_solver(B)
+
+helicity_solver = helicity_solver()
 
 def riesz_map(functional):
     function = Function(functional.function_space().dual())
@@ -321,12 +258,16 @@ def riesz_map(functional):
         helicity_solver.snes.ksp.pc.apply(x, y)
     return function
 
-def compute_potential(B):
+
+def compute_helicity_energy(B):
     helicity_solver.solve()
     problem = helicity_solver._problem
     if helicity_solver.snes.ksp.getResidualNorm() > 0.01:
+        # lifting strategy
         r = assemble(problem.F, bcs=problem.bcs)
         rstar = r.riesz_representation(riesz_map=riesz_map, bcs=problem.bcs)
+        rstar.rename("RHS")
+        # lft = uh - inner(r, uh)/inner(r, rstar) * rstar
         c = assemble(action(r, problem.u)) / assemble(action(r, rstar))
         ulft = Function(Vc, name="u_lifted")
         ulft.assign(problem.u - c * rstar)
@@ -335,46 +276,28 @@ def compute_potential(B):
         A = problem.u
     diff = norm(curl(A) - B, "L2")
     if mesh.comm.rank == 0:
-        print(f"[compute_potential] ||curl(A)-B||_L2 = {diff:.8e}", flush=True)
+        print(f"magnetic potential: ||curl(A) - B||_L2 = {diff:.8e}", flush=True)
     A_ = Function(Vc, name="MagneticPotential")
     A_.project(A)
-    return A_
+    curlA = Function(Vd, name="CurlA")
+    curlA.project(curl(A))
+    diff_ = Function(Vd, name="CurlAMinusB")
+    diff_.project(B-curlA)
+    #VTKFile("output/magnetic_potential.pvd").write(curlA, diff_, A_)
+    if bc=="closed":
+        return assemble(inner(A, B)*dx), diff, diff_, assemble(inner(B, B) * dx)
+    else: 
+        return assemble(inner(A, B + diff_)*dx), diff, diff_, assemble(inner(B - diff_, B-diff_) * dx)
+       
+def compute_Bn(B):
+    n = FacetNormal(mesh)
+    return assemble(inner(dot(B, n), dot(B, n))*ds_v)
 
+def compute_divB(B):
+    return norm(div(B), "L2")
 
-
-
-sp = None
-pb = NonlinearVariationalProblem(F, z, bcs=bcs)
-time_stepper = NonlinearVariationalSolver(pb, solver_parameters = sp)
-
-# solver for single LM
-pb_s = NonlinearVariationalProblem(F_s, z_s, bcs=bcs_s)
-time_stepper_s = NonlinearVariationalSolver(pb_s, solver_parameters = sp)
-
-# ---------------------------
-# Diagnostics: helicity, divB, energy
-# ---------------------------
-def compute_helicity(A_func, B_func):
-    if periodic:
-        harmonic = Function(Vd)
-        harmonic.project(B_func - curl(A_func))
-        diff = norm(harmonic,"L2")
-        # generalized helicity
-        return assemble(inner(A_func, B_func + harmonic) * dx)
-    else:
-        A = potential_solver_direct(B_func)
-        return assemble(inner(A_func, B_func) * dx)
-
-def compute_divB(B_func):
-    return norm(div(B_func), "L2")
-
-def compute_energy(B_func, A_func):
-    if periodic:
-        harmonic = Function(Vd)
-        harmonic.project(B_func - curl(A_func))
-        return assemble(inner(B_func - harmonic, B_func - harmonic) * dx)
-    else:
-        return assemble(inner(B_func, B_func) * dx)
+# solver
+time_stepper = build_nonlinear_solver(F, z, bcs, solver_parameters=sp, options_prefix="time_stepper")
 
 # define files
 data_filename = "output/data.csv"
@@ -384,10 +307,10 @@ if mesh.comm.rank == 0:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
-# Save t=0 diagnostics
-helicity = compute_helicity(z.sub(2), z.sub(0)) # A, B
-divB = compute_divB(z.sub(0)) # B
-energy = compute_energy(z.sub(0), z.sub(2)) # B , A
+# store the initial value
+helicity, diff, diff_, energy = compute_helicity_energy(z.sub(0))
+divB = compute_divB(z.sub(0))
+
 
 if mesh.comm.rank == 0:
     row = {
@@ -401,38 +324,24 @@ if mesh.comm.rank == 0:
         writer.writerow(row)
         print(f"{row}")
 
-delta_energy = 1.0
+
 timestep = 0
+#E_old = compute_energy(z_prev.sub(0), diff_)
+
 while (float(t) < float(T) + 1.0e-10):
     if float(t) + float(dt) > float(T):
-        dt.assign(T - t)
-    if float(dt)<=1e-14:
+        dt.assign(T - float(t))
+    if float(dt) <=1e-14:
         break
     t.assign(t + dt)
     if mesh.comm.rank == 0:
         print(RED % f"Solving for t = {float(t):.4f}, dofs = {Z.dim()}, initial condition = {ic}, time discretisation = {time_discr}, dt={float(dt)}, T={T}, bc={bc}", flush=True)
     
-    if delta_energy > 9e-5:
-        time_stepper.solve()
-        helicity = compute_helicity(z.sub(2), z.sub(0)) # A, B
-        divB = compute_divB(z.sub(0)) # B
-        energy = compute_energy(z.sub(0), z.sub(2)) # B , A
-        delta_energy = 1/float(dt) * (compute_energy(z_prev.sub(0), z_prev.sub(2)) - energy)
-        print(GREEN % f"{delta_energy}")
-
-    else:
-        (B, u, A, E, j, lmbda_e, lmbda_m) = z.subfunctions
-        z_s_prev.sub(0).assign(z.sub(0))
-        z_s_prev.sub(1).assign(z.sub(1))
-        z_s_prev.sub(2).assign(z.sub(2))
-        z_s_prev.sub(3).assign(z.sub(3))
-        z_s_prev.sub(4).assign(z.sub(4))
-        z_s_prev.sub(5).assign(z.sub(6))
-        z_s.assign(z_s_prev)
-        time_stepper_s.solve()
-        helicity = compute_helicity(z_s.sub(2), z_s.sub(0)) # A, B
-        divB = compute_divB(z_s.sub(0)) # B
-        energy = compute_energy(z_s.sub(0), z_s.sub(2)) # B , A
+    time_stepper.solve()
+    
+    # monitor
+    helicity, diff, diff_, energy= compute_helicity_energy(z.sub(0))
+    divB = compute_divB(z.sub(0))
 
     if time_discr == "adaptive":
         if timestep > 100:
@@ -455,11 +364,11 @@ while (float(t) < float(T) + 1.0e-10):
         #if timestep % 10 == 0:
         pvd.write(*z.subfunctions,time=float(t))
         if ic == "E3" and bc == "closed":
+            B_b = as_vector([0, 0, 1])
             B_recover.project(z.sub(0) + B_b)
             pvd1.write(B_recover, time=float(t))
     timestep += 1
     z_prev.assign(z)
-
 
 
 
