@@ -6,7 +6,7 @@ import sys
 
 # parameters 
 output = True
-ic = "E3" # hopf or E3 
+ic = "hopf" # hopf or E3 
 bc = "closed"
 
 if bc == "line-tied":
@@ -22,7 +22,7 @@ time_discr = "adaptive" # uniform or adaptive
 
 if ic == "hopf":
     Lx, Ly, Lz = 8, 8, 20
-    Nx, Ny, Nz = 4, 4, 10
+    Nx, Ny, Nz = 8, 8, 10
 elif ic == "E3":
     Lx, Ly, Lz = 8, 8, 48
     Nx, Ny, Nz = 4, 4, 24
