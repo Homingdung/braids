@@ -419,6 +419,7 @@ while (float(t) < float(T) + 1.0e-10):
         energy = compute_energy(z.sub(0), z.sub(2)) # B , A
         delta_energy = 1/float(dt) * (compute_energy(z_prev.sub(0), z_prev.sub(2)) - energy)
         print(GREEN % f"{delta_energy}")
+        print(BLUE % f"lmbda_e = {norm(z.sub(5))}, lmbda_m={norm(z.sub(6))}")
 
     else:
         (B, u, A, E, j, lmbda_e, lmbda_m) = z.subfunctions
@@ -433,7 +434,7 @@ while (float(t) < float(T) + 1.0e-10):
         helicity = compute_helicity(z_s.sub(2), z_s.sub(0)) # A, B
         divB = compute_divB(z_s.sub(0)) # B
         energy = compute_energy(z_s.sub(0), z_s.sub(2)) # B , A
-
+        print(BLUE % f"lmbda_m ={norm(z.sub(6))}")
     if time_discr == "adaptive":
         if timestep > 100:
             dt.assign(100)
