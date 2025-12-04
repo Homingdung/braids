@@ -6,7 +6,7 @@ import sys
 
 # parameters 
 output = True
-ic = "hopf" # hopf or E3 
+ic = "E3" # hopf or E3 
 bc = "closed"
 
 if bc == "line-tied":
@@ -301,12 +301,30 @@ def compute_Bn(B):
 def compute_divB(B):
     return norm(div(B), "L2")
 
+# monitor of (non)linear force-free field
+def compute_lamb(j, B):
+    eps = 1e-10
+    lamb = Function(Vg_).interpolate(dot(j, B)/(dot(B, B) + eps))
+    with lamb.dat.vec_ro as v:
+        _, max_val = v.max()
+        _, min_val = v.min()
+    return max_val
+
+# monitor of force-free
+def compute_xi_max(j, B):
+    eps = 1e-10
+    xi = Function(Vg_).interpolate(dot(cross(j, B), cross(j, B))/(dot(B, B) + eps))
+    with xi.dat.vec_ro as v:
+        _, max_val = v.max()
+        _, min_val = v.min()
+    return max_val
+
 # solver
 time_stepper = build_nonlinear_solver(F, z, bcs, solver_parameters=sp, options_prefix="time_stepper")
 
 # define files
 data_filename = "output/data.csv"
-fieldnames = ["t", "helicity", "energy", "divB"]
+fieldnames = ["t", "helicity", "energy", "divB", "lamb", "xi"]
 if mesh.comm.rank == 0:
     with open(data_filename, "w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -315,7 +333,8 @@ if mesh.comm.rank == 0:
 # store the initial value
 helicity, diff, diff_, energy = compute_helicity_energy(z.sub(0))
 divB = compute_divB(z.sub(0))
-
+lamb = compute_lamb(z.sub(1), z.sub(0))
+xi = compute_xi_max(z.sub(1), z.sub(0))
 
 if mesh.comm.rank == 0:
     row = {
@@ -323,6 +342,7 @@ if mesh.comm.rank == 0:
         "helicity": float(helicity),
         "energy": float(energy),
         "divB": float(divB),
+        "xi": float(xi),
     }
     with open(data_filename, "a", newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -347,6 +367,8 @@ while (float(t) < float(T) + 1.0e-10):
     # monitor
     helicity, diff, diff_, energy= compute_helicity_energy(z.sub(0))
     divB = compute_divB(z.sub(0))
+    lamb = compute_lamb(z.sub(1), z.sub(0))
+    xi = compute_xi_max(z.sub(1), z.sub(0))
 
     if time_discr == "adaptive":
         if timestep > 100:
@@ -359,6 +381,8 @@ while (float(t) < float(T) + 1.0e-10):
             "helicity": float(helicity),
             "energy": float(energy),
             "divB": float(divB),
+            "lamb": float(lamb),
+            "xi": float(xi),
         }
         with open(data_filename, "a", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
