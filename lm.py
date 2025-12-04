@@ -6,7 +6,7 @@ import sys
 
 # parameters 
 output = True
-ic = "E3" # hopf or E3 
+ic = "hopf" # hopf or E3 
 bc = "closed"
 
 if bc == "line-tied":
@@ -383,16 +383,25 @@ def compute_lamb(j, B):
     with lamb.dat.vec_ro as v:
         _, max_val = v.max()
         _, min_val = v.min()
-    return max_val
+    if abs(min_val) < eps:
+        return eps
+    else:
+        return max_val/min_val
+
+
 
 # monitor of force-free
 def compute_xi_max(j, B):
     eps = 1e-10
-    xi = Function(Vg_).interpolate(dot(cross(j, B), cross(j, B))/(dot(B, B) + eps))
+    xi = Function(Vg).interpolate(cross(j, B)/(dot(B, B) + eps))
     with xi.dat.vec_ro as v:
         _, max_val = v.max()
         _, min_val = v.min()
-    return max_val
+    
+    if abs(min_val) < eps:
+        return eps
+    else:
+        return max_val/min_val
 
 # define files
 data_filename = "output/data.csv"
@@ -440,9 +449,10 @@ while (float(t) < float(T) + 1.0e-10):
         divB = compute_divB(z.sub(0)) # B
         energy = compute_energy(z.sub(0), z.sub(2)) # B , A
         delta_energy = 1/float(dt) * (compute_energy(z_prev.sub(0), z_prev.sub(2)) - energy)
+        lamb = compute_lamb(z.sub(4), z.sub(0)) # j, B
+        xi = compute_xi_max(z.sub(4), z.sub(0)) # j, B
         print(GREEN % f"{delta_energy}")
         print(BLUE % f"lmbda_e = {norm(z.sub(5))}, lmbda_m={norm(z.sub(6))}")
-
     else:
         (B, u, A, E, j, lmbda_e, lmbda_m) = z.subfunctions
         z_s_prev.sub(0).assign(z.sub(0))
@@ -461,7 +471,7 @@ while (float(t) < float(T) + 1.0e-10):
         print(BLUE % f"lmbda_m ={norm(z.sub(6))}")
     if time_discr == "adaptive":
         if timestep > 100:
-            dt.assign(100)
+            dt.assign(50)
             tau.assign(0.1)
     
     if mesh.comm.rank == 0:
