@@ -3,12 +3,11 @@ from firedrake import *
 import csv
 import os
 import sys
-from ufl import atan2   # 加在脚本开头
-from scipy import special
+
 # parameters 
 output = True
-ic = "tv" # hopf or E3 
-bc = "line-tied"
+ic = "E3" # hopf or E3 
+bc = "closed"
 
 if bc == "line-tied":
     periodic = False
@@ -28,9 +27,6 @@ elif ic == "E3":
     Lx, Ly, Lz = 8, 8, 48
     Nx, Ny, Nz = 4, 4, 24
 
-elif ic == "tv":
-    Lx, Ly, Lz = 8, 8, 8
-    Nx, Ny, Nz = 8, 8, 8
 
 if periodic:
     dirichlet_ids = ("on_boundary",)
@@ -39,16 +35,16 @@ else:
 
 
 order = 1  # polynomial degree
-tau = Constant(10)
+tau = Constant(1)
 t = Constant(0)
-dt = Constant(1)
+dt = Constant(0.1)
 T = 10000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
 mesh.coordinates.dat.data[:, 0] -= Lx/2
 mesh.coordinates.dat.data[:, 1] -= Ly/2
-#mesh.coordinates.dat.data[:, 2] -= Lz/2
+mesh.coordinates.dat.data[:, 2] -= Lz/2
 
 Vg = VectorFunctionSpace(mesh, "Q", order)
 Vg_ = FunctionSpace(mesh, "Q", order)
@@ -73,70 +69,6 @@ j_avg = j
 #j_avg = (j + jp)/2  # or j?
 u_avg = u
 #u_avg = (u + up)/2  # or u?
-
-
-X0, Y0, Z0 = SpatialCoordinate(mesh)
-# Physical / model parameters (replace with your values)
-mu0 = Constant(1.0)
-I0  = Constant(1.0)
-I   = Constant(1.0)
-R   = Constant(2.0)
-a   = Constant(0.2)
-d   = Constant(0.0)
-q = Constant(1.0)
-L = Constant(0.3)
-eps = Constant(1e-12)
-
-# ---------------------------------------------------------------
-#  Geometry: r_perp, rho
-# ---------------------------------------------------------------
-r_perp      = sqrt(Y0**2 + (Z0 + d)**2)
-r_perp_safe = sqrt(r_perp**2 + eps)
-
-rho      = sqrt(X0**2 + (r_perp - R)**2)
-rho_safe = sqrt(rho**2 + eps)
-
-# Heaviside chi(a - rho)
-chi = conditional(a - rho > 0.0, 1.0, 0.0)
-
-# ---------------------------------------------------------------
-#  Inside the square root (Titov eq. 16)
-# ---------------------------------------------------------------
-inside_sqrt = (1.0 / R**2) + \
-              2.0 * chi * ((a - rho) / a**2) * (I**2 / I0**2) * (1.0 - (rho**2)/(a**2))
-
-inside_sqrt_safe = conditional(inside_sqrt > 0.0, inside_sqrt, 0.0)
-term1 = sqrt(inside_sqrt_safe)
-
-term2 = 1.0 / r_perp_safe
-
-# B_theta
-prefactor = mu0 * I0 / (2.0 * pi)
-B_theta = prefactor * (term1 + term2 - (1.0 / R))
-
-# ---------------------------------------------------------------
-#  hat(theta) = (0, -(Z0+d)/r_perp, Y0/r_perp)
-# ---------------------------------------------------------------
-hat_theta = as_vector((
-    0.0,
-    -(Z0 + d) / r_perp_safe,
-    Y0 / r_perp_safe
-))
-
-# B_theta
-B_theta = B_theta * hat_theta
-
-# B_q
-r_p = as_vector([X0 - L, Y0, Z0 + d])
-r_m = as_vector([X0 + L, Y0, Z0 + d])
-r_p_3 = sqrt(dot(r_p, r_p)) ** 3
-r_m_3 = sqrt(dot(r_m, r_m)) ** 3
-
-B_q = q * (r_p/r_p_3 - r_m/r_m_3)
-
-B_init = B_theta + B_q
-
-
 
 F = (
       inner((B-Bp)/dt, Bt) * dx
@@ -171,6 +103,40 @@ lu = {
 }
 sp = lu
        
+
+(X0, Y0, Z0) = x = SpatialCoordinate(mesh)
+
+# Hopf fibre
+if ic == "hopf":
+    w1 = 3
+    w2 = 2
+    s = 1
+    deno = 1 + dot(x, x)
+    coeff = 4*sqrt(s)/((pi * deno * deno * deno)*sqrt(w1**2+w2**2))
+    B_init = as_vector([coeff*2*(w2*Y0-w1*X0*Z0), -coeff*2*(w2*X0+w1*Y0*Z0), coeff*w1*(-1+X0**2+Y0**2-Z0**2)])
+
+elif ic == "E3":
+    x_c = [1, -1, 1, -1, 1, -1]
+    y_c = 0
+    z_c = [-20, -12, -4, 4, 12, 20]
+    a = sqrt(2)
+    # strength of twist
+    k = 5
+    l = 2
+    B_0 = 1
+
+    B_z = B_0
+    B_x = 0
+    B_y = 0
+    # background magnetic field
+    B_b = as_vector([0, 0, B_0])
+    for i in range(6):
+        coeff = exp((-(X0-x_c[i])**2/(a**2)) - ((Y0 - y_c)**2/(a**2)) - ((Z0 - z_c[i])**2/(l**2))) 
+        B_x += coeff * ((2 * k * B_0/a) * (-(Y0-y_c)))
+        B_y += coeff * ((2 * k * B_0/a) * ((X0-x_c[i])))
+
+    B_init = as_vector([B_x, B_y, B_z]) - B_b
+
 (B_, j_, H_, u_, E_) = z.subfunctions
 B_.rename("MagneticField")
 E_.rename("ElectricField")
