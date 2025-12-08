@@ -4,7 +4,7 @@ import csv
 import os
 import sys
 from ufl import atan2   # 加在脚本开头
-from scipy import special
+import numpy as np
 # parameters 
 output = True
 ic = "tv" # hopf or E3 
@@ -134,7 +134,51 @@ r_m_3 = sqrt(dot(r_m, r_m)) ** 3
 
 B_q = q * (r_p/r_p_3 - r_m/r_m_3)
 
-B_init = B_theta + B_q
+# B_I
+def K_comp(k):
+    k = float(k)
+    #use asymptotic approximation k to 1
+    return -0.5 * log(1 - k**2)
+    
+def E_comp(k, n_terms =4):
+    # Convert to float
+    k = float(k)
+    m = k*k
+    
+    c = [0.0, -1.0/4.0, -3.0/64.0, -5.0/256.0, -175.0/16384.0]
+
+    if not (1 <= n_terms <= 4):
+        raise ValueError("n_terms must be between 1 and 4.")
+
+    # Build polynomial
+    series = 1.0
+    pow_m = m
+    for n in range(1, n_terms+1):
+        series += c[n] * pow_m
+        pow_m *= m  # next power
+
+    return (pi / 2.0) * series
+
+def A_cal(k):
+    return 1/k * ((2-k**2) * K_comp(k) - 2 * E_comp(k))
+
+
+def A_I_ex_comp(x, r_perp):
+    return mu0*I/(2*pi) * sqrt(R/r_perp) * A_cal(k)
+
+
+def A_cal_prime(k):
+    return ((2-k**2) * E_comp(k) - 2 * (1-k**2) * K_comp(k)) / (k**2 * (1-k**2))
+
+k_a = 2 * sqrt(r_perp * R/(4 * r_perp * R + a **2))
+k = 2 * sqrt(r_perp * R/(r_perp + R)**2 + X0**2)
+
+A_I_ex =  A_I_ex_comp(X0, r_perp)
+A_t_I_ex = mu0 * I/(2*pi) * sqrt(R/r_perp) * (A_cal(k_a) + A_cal_prime(k - k_a))
+
+A_I = chi * A_t_I_ex + chi * A_I_ex
+B_I = curl(A_I)
+B_init = B_theta + B_q + B_I
 
 
 
