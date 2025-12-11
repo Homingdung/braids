@@ -3,8 +3,10 @@ from firedrake import *
 import csv
 import os
 import sys
-from ufl import atan2   # 加在脚本开头
+from ufl import atan2   
 import numpy as np
+# complete elliptic integral of the first and the second kind
+from scipy.special import ellipk, ellipe
 # parameters 
 output = True
 ic = "tv" # hopf or E3 
@@ -41,7 +43,7 @@ else:
 order = 1  # polynomial degree
 tau = Constant(10)
 t = Constant(0)
-dt = Constant(1)
+dt = Constant(0.1)
 T = 10000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
@@ -55,6 +57,8 @@ Vg_ = FunctionSpace(mesh, "Q", order)
 Vc = FunctionSpace(mesh, "NCE", order)
 Vd = FunctionSpace(mesh, "NCF", order)
 Vn = FunctionSpace(mesh, "DQ", order-1)
+Real = FunctionSpace(mesh, "R", 0)
+zero = Function(Real).assign(0)
 
 # Mixed unknowns: [B, j, H, u, E]
 Z = MixedFunctionSpace([Vd, Vc, Vc, Vd, Vc])
@@ -97,13 +101,12 @@ rho      = sqrt(X0**2 + (r_perp - R)**2)
 rho_safe = sqrt(rho**2 + eps)
 
 # Heaviside chi(a - rho)
-chi = conditional(a - rho > 0.0, 1.0, 0.0)
+def chi(x):
+    chi = conditional(x >0.0, 1.0, 0.0)
+    return chi
 
-# ---------------------------------------------------------------
-#  Inside the square root (Titov eq. 16)
-# ---------------------------------------------------------------
 inside_sqrt = (1.0 / R**2) + \
-              2.0 * chi * ((a - rho) / a**2) * (I**2 / I0**2) * (1.0 - (rho**2)/(a**2))
+              2.0 * chi(a - rho) * (I**2 / I0**2) * (1.0 - (rho**2)/(a**2))
 
 inside_sqrt_safe = conditional(inside_sqrt > 0.0, inside_sqrt, 0.0)
 term1 = sqrt(inside_sqrt_safe)
@@ -114,9 +117,6 @@ term2 = 1.0 / r_perp_safe
 prefactor = mu0 * I0 / (2.0 * pi)
 B_theta = prefactor * (term1 + term2 - (1.0 / R))
 
-# ---------------------------------------------------------------
-#  hat(theta) = (0, -(Z0+d)/r_perp, Y0/r_perp)
-# ---------------------------------------------------------------
 hat_theta = as_vector((
     0.0,
     -(Z0 + d) / r_perp_safe,
@@ -134,53 +134,26 @@ r_m_3 = sqrt(dot(r_m, r_m)) ** 3
 
 B_q = q * (r_p/r_p_3 - r_m/r_m_3)
 
-# B_I
-def K_comp(k):
-    k = float(k)
-    #use asymptotic approximation k to 1
-    return -0.5 * log(1 - k**2)
-    
-def E_comp(k, n_terms =4):
-    # Convert to float
-    k = float(k)
-    m = k*k
-    
-    c = [0.0, -1.0/4.0, -3.0/64.0, -5.0/256.0, -175.0/16384.0]
 
-    if not (1 <= n_terms <= 4):
-        raise ValueError("n_terms must be between 1 and 4.")
+#def A_I(X0):
+k = 2 * sqrt(r_perp_safe * R/(r_perp_safe + R)**2 + X0**2)
+k_a = 2 * sqrt(r_perp_safe * R/(4 * r_perp_safe * R + a **2))
 
-    # Build polynomial
-    series = 1.0
-    pow_m = m
-    for n in range(1, n_terms+1):
-        series += c[n] * pow_m
-        pow_m *= m  # next power
+K_ellip = ellipk(0.5)# first kind
 
-    return (pi / 2.0) * series
+E_ellip  = ellipe(0.5)# second kind
+A_cal = 1/k * ((2-k**2) * K_ellip - 2 * E_ellip)
+A_diff = ((2-k**2) * E_ellip - 2 * (1-k**2) * K_ellip) / (k**2 * (1-k**2))
 
-def A_cal(k):
-    return 1/k * ((2-k**2) * K_comp(k) - 2 * E_comp(k))
+A_I_ex =  mu0 * I/2*pi * sqrt(R/r_perp_safe) * A_cal
+A_I_in = mu0*I/(2*pi) * sqrt(R/r_perp_safe) * (A_cal  + A_diff * (k - k_a)) 
 
+A_I = chi(a - rho) * A_I_in + chi(rho-a) * A_I_ex
 
-def A_I_ex_comp(x, r_perp):
-    return mu0*I/(2*pi) * sqrt(R/r_perp) * A_cal(k)
-
-
-def A_cal_prime(k):
-    return ((2-k**2) * E_comp(k) - 2 * (1-k**2) * K_comp(k)) / (k**2 * (1-k**2))
-
-k_a = 2 * sqrt(r_perp * R/(4 * r_perp * R + a **2))
-k = 2 * sqrt(r_perp * R/(r_perp + R)**2 + X0**2)
-
-A_I_ex =  A_I_ex_comp(X0, r_perp)
-A_t_I_ex = mu0 * I/(2*pi) * sqrt(R/r_perp) * (A_cal(k_a) + A_cal_prime(k - k_a))
-
-A_I = chi * A_t_I_ex + chi * A_I_ex
-B_I = curl(A_I)
-B_init = B_theta + B_q + B_I
-
-
+A_I_ = A_I * hat_theta
+B_I = curl(A_I_)
+B_exp = B_theta + B_q  + B_I
+B_init = Function(Vd).project(B_exp, form_compiler_parameters={"quadrature_degree": 12})
 
 F = (
       inner((B-Bp)/dt, Bt) * dx
