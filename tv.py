@@ -43,7 +43,7 @@ else:
 order = 1  # polynomial degree
 tau = Constant(10)
 t = Constant(0)
-dt = Constant(0.1)
+dt = Constant(1)
 T = 10000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
@@ -101,12 +101,13 @@ rho      = sqrt(X0**2 + (r_perp - R)**2)
 rho_safe = sqrt(rho**2 + eps)
 
 # Heaviside chi(a - rho)
-def chi(x):
-    chi = conditional(x >0.0, 1.0, 0.0)
-    return chi
+chi = conditional(a - rho > 0.0, 1.0, 0.0)
 
+# ---------------------------------------------------------------
+#  Inside the square root (Titov eq. 16)
+# ---------------------------------------------------------------
 inside_sqrt = (1.0 / R**2) + \
-              2.0 * chi(a - rho) * (I**2 / I0**2) * (1.0 - (rho**2)/(a**2))
+              2.0 * chi * ((a - rho) / a**2) * (I**2 / I0**2) * (1.0 - (rho**2)/(a**2))
 
 inside_sqrt_safe = conditional(inside_sqrt > 0.0, inside_sqrt, 0.0)
 term1 = sqrt(inside_sqrt_safe)
@@ -117,6 +118,9 @@ term2 = 1.0 / r_perp_safe
 prefactor = mu0 * I0 / (2.0 * pi)
 B_theta = prefactor * (term1 + term2 - (1.0 / R))
 
+# ---------------------------------------------------------------
+#  hat(theta) = (0, -(Z0+d)/r_perp, Y0/r_perp)
+# ---------------------------------------------------------------
 hat_theta = as_vector((
     0.0,
     -(Z0 + d) / r_perp_safe,
@@ -135,25 +139,38 @@ r_m_3 = sqrt(dot(r_m, r_m)) ** 3
 B_q = q * (r_p/r_p_3 - r_m/r_m_3)
 
 
-#def A_I(X0):
-k = 2 * sqrt(r_perp_safe * R/(r_perp_safe + R)**2 + X0**2)
-k_a = 2 * sqrt(r_perp_safe * R/(4 * r_perp_safe * R + a **2))
+def A_I_compute(X0):
+    k_a = 2 * sqrt(r_perp_safe * R/(4 * r_perp_safe * R + a **2))
+    k = 2 * sqrt(r_perp_safe * R/((r_perp_safe + R)**2 + X0**2))
+    m = 1
+    K_ellip = float(ellipk(m)) # first kind
+    E_ellip  = float(ellipe(m)) # second kind
+    A_cal = 1/k * ((2-k**2) * K_ellip - 2 * E_ellip)
+    A_diff = ((2-k**2) * E_ellip - 2 * (1-k**2) * K_ellip) / (k**2 * (1-k**2))
 
-K_ellip = ellipk(0.5)# first kind
+    A_I_ex =  mu0 * I/2*pi * sqrt(R/r_perp_safe) * A_cal
+    A_I_in = mu0*I/(2*pi) * sqrt(R/r_perp_safe) * (A_cal  + A_diff * (k - k_a)) 
 
-E_ellip  = ellipe(0.5)# second kind
-A_cal = 1/k * ((2-k**2) * K_ellip - 2 * E_ellip)
-A_diff = ((2-k**2) * E_ellip - 2 * (1-k**2) * K_ellip) / (k**2 * (1-k**2))
+    return chi * A_I_in + chi * A_I_ex
 
-A_I_ex =  mu0 * I/2*pi * sqrt(R/r_perp_safe) * A_cal
-A_I_in = mu0*I/(2*pi) * sqrt(R/r_perp_safe) * (A_cal  + A_diff * (k - k_a)) 
+hat_theta = as_vector((
+    zero,
+    -(Z0 + d) / r_perp_safe,
+    Y0 / r_perp_safe
+))
 
-A_I = chi(a - rho) * A_I_in + chi(rho-a) * A_I_ex
+m = Vg_.mesh()
+W = VectorFunctionSpace(m, Vg_.ufl_element())
+X = assemble(project(m.coordinates, W))
+A_I = Function(Vg)
+A_I.data[:] = A_I_compute(X.dat.data_ro)
 
 A_I_ = A_I * hat_theta
 B_I = curl(A_I_)
-B_exp = B_theta + B_q  + B_I
-B_init = Function(Vd).project(B_exp, form_compiler_parameters={"quadrature_degree": 12})
+#B_init = B_theta + B_q + B_I 
+B_init = B_I 
+
+
 
 F = (
       inner((B-Bp)/dt, Bt) * dx
