@@ -14,6 +14,6 @@ plt.xlabel('Time')
 plt.ylabel('Values')
 plt.legend(loc='upper right')
 plt.tight_layout()
-plt.savefig("output/figure.png", dpi=750, bbox_inches='tight')
+plt.savefig("output/monitor.png", dpi=750, bbox_inches='tight')
 plt.show()
 
