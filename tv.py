@@ -10,7 +10,7 @@ from scipy.special import ellipk, ellipe
 # parameters 
 output = True
 ic = "tv" # hopf or E3 
-bc = "line-tied"
+bc = "closed"
 
 if bc == "line-tied":
     periodic = False
@@ -80,20 +80,69 @@ u_avg = u
 
 
 X0, Y0, Z0 = SpatialCoordinate(mesh)
-# Physical / model parameters (replace with your values)
-mu0 = Constant(1.0)
-I0  = Constant(1.0)
-I   = Constant(1.0)
-R   = Constant(2.0)
-a   = Constant(0.2)
-d   = Constant(0.0)
-q = Constant(1.0)
-L = Constant(0.3)
-eps = Constant(1e-12)
+# constants
+mu0 = 1.0
+I0  = 1.0
+I   = 1.0
+R   = 2.0
+a   = 0.2
+d   = 0.0
+q   = 1.0
+L   = 0.3
+eps = 1e-12
+pi  = np.pi
 
-# ---------------------------------------------------------------
-#  Geometry: r_perp, rho
-# ---------------------------------------------------------------
+
+def A_I_compute(X0, Y0, Z0):
+    # r_perp
+    r_perp = np.sqrt(Y0**2 + (Z0 + d)**2)
+    r_perp_safe = np.sqrt(r_perp**2 + eps)
+
+    # rho
+    rho_sq = X0**2 + (r_perp - R)**2
+    rho = np.sqrt(rho_sq)
+    rho_safe = np.sqrt(rho_sq + eps)
+
+    # chi
+    chi = np.where(a - rho > 0.0, 1.0, 0.0)
+
+    # hat_theta
+    hat_theta = np.stack((
+        np.zeros_like(X0),
+        -(Z0 + d) / r_perp_safe,
+        Y0 / r_perp_safe
+    ), axis=-1)
+
+    # elliptic parameters
+    k_a = 2 * np.sqrt(r_perp_safe * R / (4 * r_perp_safe * R + a**2))
+    k   = 2 * np.sqrt(r_perp_safe * R / ((r_perp_safe + R)**2 + X0**2))
+
+    # elliptic integrals
+    K_ellip = ellipk(k**2)   # SciPy uses m = k^2
+    E_ellip = ellipe(k**2)
+
+    # A_cal and A_diff
+    A_cal = (1 / k) * ((2 - k**2) * K_ellip - 2 * E_ellip)
+    A_diff = ((2 - k**2) * E_ellip - 2 * (1 - k**2) * K_ellip) / (k**2 * (1 - k**2))
+
+    # inside / outside
+    A_I_ex = mu0 * I / (2 * pi) * np.sqrt(R / r_perp_safe) * A_cal
+    A_I_in = mu0 * I / (2 * pi) * np.sqrt(R / r_perp_safe) * (A_cal + A_diff * (k - k_a))
+
+    # final A
+    A_exp = chi * A_I_in + (1 - chi) * A_I_ex
+
+    return A_exp[..., None] * hat_theta
+
+m = Vg_.mesh()
+W = VectorFunctionSpace(m, Vg_.ufl_element())
+X = assemble(project(m.coordinates, W))
+
+A_I = Function(Vg)
+A_I.dat.data[:] = A_I_compute(*X.dat.data_ro.T)
+A_init = Function(Vc).project(A_I)
+B_I = curl(A_init)
+
 r_perp      = sqrt(Y0**2 + (Z0 + d)**2)
 r_perp_safe = sqrt(r_perp**2 + eps)
 
@@ -101,13 +150,13 @@ rho      = sqrt(X0**2 + (r_perp - R)**2)
 rho_safe = sqrt(rho**2 + eps)
 
 # Heaviside chi(a - rho)
-chi = conditional(a - rho > 0.0, 1.0, 0.0)
+chi_ = conditional(a - rho > 0.0, 1.0, 0.0)
 
 # ---------------------------------------------------------------
 #  Inside the square root (Titov eq. 16)
 # ---------------------------------------------------------------
 inside_sqrt = (1.0 / R**2) + \
-              2.0 * chi * ((a - rho) / a**2) * (I**2 / I0**2) * (1.0 - (rho**2)/(a**2))
+              2.0 * chi_ * ((a - rho) / a**2) * (I**2 / I0**2) * (1.0 - (rho**2)/(a**2))
 
 inside_sqrt_safe = conditional(inside_sqrt > 0.0, inside_sqrt, 0.0)
 term1 = sqrt(inside_sqrt_safe)
@@ -118,9 +167,6 @@ term2 = 1.0 / r_perp_safe
 prefactor = mu0 * I0 / (2.0 * pi)
 B_theta = prefactor * (term1 + term2 - (1.0 / R))
 
-# ---------------------------------------------------------------
-#  hat(theta) = (0, -(Z0+d)/r_perp, Y0/r_perp)
-# ---------------------------------------------------------------
 hat_theta = as_vector((
     0.0,
     -(Z0 + d) / r_perp_safe,
@@ -137,40 +183,9 @@ r_p_3 = sqrt(dot(r_p, r_p)) ** 3
 r_m_3 = sqrt(dot(r_m, r_m)) ** 3
 
 B_q = q * (r_p/r_p_3 - r_m/r_m_3)
+B_init = B_I + B_theta + B_q
 
-
-def A_I_compute(X0):
-    k_a = 2 * sqrt(r_perp_safe * R/(4 * r_perp_safe * R + a **2))
-    k = 2 * sqrt(r_perp_safe * R/((r_perp_safe + R)**2 + X0**2))
-    m = 1
-    K_ellip = float(ellipk(m)) # first kind
-    E_ellip  = float(ellipe(m)) # second kind
-    A_cal = 1/k * ((2-k**2) * K_ellip - 2 * E_ellip)
-    A_diff = ((2-k**2) * E_ellip - 2 * (1-k**2) * K_ellip) / (k**2 * (1-k**2))
-
-    A_I_ex =  mu0 * I/2*pi * sqrt(R/r_perp_safe) * A_cal
-    A_I_in = mu0*I/(2*pi) * sqrt(R/r_perp_safe) * (A_cal  + A_diff * (k - k_a)) 
-
-    return chi * A_I_in + chi * A_I_ex
-
-hat_theta = as_vector((
-    zero,
-    -(Z0 + d) / r_perp_safe,
-    Y0 / r_perp_safe
-))
-
-m = Vg_.mesh()
-W = VectorFunctionSpace(m, Vg_.ufl_element())
-X = assemble(project(m.coordinates, W))
-A_I = Function(Vg)
-A_I.data[:] = A_I_compute(X.dat.data_ro)
-
-A_I_ = A_I * hat_theta
-B_I = curl(A_I_)
-#B_init = B_theta + B_q + B_I 
-B_init = B_I 
-
-
+B_init = Function(Vd).project(B_init, form_compiler_parameters={"quadrature_degree": 12})
 
 F = (
       inner((B-Bp)/dt, Bt) * dx
