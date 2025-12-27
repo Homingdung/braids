@@ -89,6 +89,7 @@ def form_helicity(A, B):
     else:
         return dot(A, B)
 
+eps = 1e-5
 F = (
     inner(B, Bt) * dx 
     - inner(curl(A), Bt) * dx
@@ -434,6 +435,7 @@ if mesh.comm.rank == 0:
 
 delta_energy = 1.0
 timestep = 0
+z_s_init = False
 while (float(t) < float(T) + 1.0e-10):
     if float(t) + float(dt) > float(T):
         dt.assign(T - t)
@@ -454,21 +456,24 @@ while (float(t) < float(T) + 1.0e-10):
         print(GREEN % f"{delta_energy}")
         print(BLUE % f"lmbda_e = {norm(z.sub(5))}, lmbda_m={norm(z.sub(6))}")
     else:
-        (B, u, A, E, j, lmbda_e, lmbda_m) = z.subfunctions
-        z_s_prev.sub(0).assign(z.sub(0))
-        z_s_prev.sub(1).assign(z.sub(1))
-        z_s_prev.sub(2).assign(z.sub(2))
-        z_s_prev.sub(3).assign(z.sub(3))
-        z_s_prev.sub(4).assign(z.sub(4))
-        z_s_prev.sub(5).assign(z.sub(6))
+        if not z_s_init:
+            z_s_prev.sub(0).assign(z.sub(0))
+            z_s_prev.sub(1).assign(z.sub(1))
+            z_s_prev.sub(2).assign(z.sub(2))
+            z_s_prev.sub(3).assign(z.sub(3))
+            z_s_prev.sub(4).assign(z.sub(4))
+            z_s_prev.sub(5).assign(z.sub(6))
+            print("initializing for z_s is done")
+            z_s_init = True
+        #(B, u, A, E, j, lmbda_e, lmbda_m) = z.subfunctions
         z_s.assign(z_s_prev)
         time_stepper_s.solve()
         helicity = compute_helicity(z_s.sub(2), z_s.sub(0)) # A, B
         divB = compute_divB(z_s.sub(0)) # B
         energy = compute_energy(z_s.sub(0), z_s.sub(2)) # B , A
-        lamb = compute_lamb(z.sub(4), z.sub(0)) # j, B
-        xi = compute_xi_max(z.sub(4), z.sub(0)) # j, B
-        print(BLUE % f"lmbda_m ={norm(z.sub(6))}")
+        lamb = compute_lamb(z_s.sub(4), z_s.sub(0)) # j, B
+        xi = compute_xi_max(z_s.sub(4), z_s.sub(0)) # j, B
+        print(BLUE % f"lmbda_m ={norm(z_s.sub(5))}")
     if time_discr == "adaptive":
         if timestep > 100:
             dt.assign(50)
@@ -496,6 +501,7 @@ while (float(t) < float(T) + 1.0e-10):
             pvd1.write(B_recover, time=float(t))
     timestep += 1
     z_prev.assign(z)
+    z_s_prev.assign(z_s)
 
 
 
