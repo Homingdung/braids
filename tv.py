@@ -10,7 +10,7 @@ from scipy.special import ellipk, ellipe
 # parameters 
 output = True
 ic = "tv" # hopf or E3 
-bc = "closed"
+bc = "line-tied"
 
 if bc == "line-tied":
     periodic = False
@@ -31,7 +31,7 @@ elif ic == "E3":
     Nx, Ny, Nz = 4, 4, 24
 
 elif ic == "tv":
-    Lx, Ly, Lz = 8, 8, 8
+    Lx, Ly, Lz = 5, 5, 10
     Nx, Ny, Nz = 8, 8, 8
 
 if periodic:
@@ -41,7 +41,7 @@ else:
 
 
 order = 1  # polynomial degree
-tau = Constant(10)
+tau = Constant(1)
 t = Constant(0)
 dt = Constant(1)
 T = 10000
@@ -49,7 +49,7 @@ T = 10000
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
 mesh.coordinates.dat.data[:, 0] -= Lx/2
-mesh.coordinates.dat.data[:, 1] -= Ly/2
+#mesh.coordinates.dat.data[:, 1] -= Ly/2
 #mesh.coordinates.dat.data[:, 2] -= Lz/2
 
 Vg = VectorFunctionSpace(mesh, "Q", order)
@@ -84,7 +84,7 @@ X0, Y0, Z0 = SpatialCoordinate(mesh)
 mu0 = 1.0
 I0  = 1.0
 I   = 1.0
-R   = 2.0
+R   = 2.2
 a   = 0.2
 d   = 0.0
 q   = 1.0
@@ -152,9 +152,6 @@ rho_safe = sqrt(rho**2 + eps)
 # Heaviside chi(a - rho)
 chi_ = conditional(a - rho > 0.0, 1.0, 0.0)
 
-# ---------------------------------------------------------------
-#  Inside the square root (Titov eq. 16)
-# ---------------------------------------------------------------
 inside_sqrt = (1.0 / R**2) + \
               2.0 * chi_ * ((a - rho) / a**2) * (I**2 / I0**2) * (1.0 - (rho**2)/(a**2))
 
@@ -185,7 +182,7 @@ r_m_3 = sqrt(dot(r_m, r_m)) ** 3
 B_q = q * (r_p/r_p_3 - r_m/r_m_3)
 B_init = B_I + B_theta + B_q
 
-B_init = Function(Vd).project(B_init, form_compiler_parameters={"quadrature_degree": 12})
+#B_init = Function(Vd).project(B_init, form_compiler_parameters={"quadrature_degree": 12})
 
 F = (
       inner((B-Bp)/dt, Bt) * dx
