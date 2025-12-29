@@ -38,7 +38,7 @@ order = 1  # polynomial degree
 tau = Constant(1)
 t = Constant(0)
 dt = Constant(0.1)
-T = 10000
+T = 20000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
@@ -127,7 +127,7 @@ F_s = (
     + inner(cross(u_s, B_s), E_st) * dx
 
     + inner(u_s, u_st) * dx
-    - tau * inner(cross(j_s, B_s), u_st) * dx
+    - tau * inner(cross(j_s, B_s),  u_st) * dx
     
     + inner(j_s, j_st) * dx
     - inner(B_s, curl(j_st)) * dx
@@ -475,9 +475,9 @@ while (float(t) < float(T) + 1.0e-10):
         xi = compute_xi_max(z_s.sub(4), z_s.sub(0)) # j, B
         print(BLUE % f"lmbda_m ={norm(z_s.sub(5))}")
     if time_discr == "adaptive":
-        if timestep > 100:
-            dt.assign(50)
-            tau.assign(0.1)
+        if timestep > 200:
+            dt.assign(100)
+            tau.assign(1)
     
     if mesh.comm.rank == 0:
         row = {
