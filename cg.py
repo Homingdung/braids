@@ -1,16 +1,13 @@
-# avfet method for relaxation 
+# cg for comparison
 from firedrake import *
 import csv
 import os
 import sys
-from ufl import atan2   
-import numpy as np
-# complete elliptic integral of the first and the second kind
-from scipy.special import ellipk, ellipe
+
 # parameters 
 output = True
-ic = "tv" # hopf or E3 
-bc = "line-tied"
+ic = "hopf" # hopf or E3 
+bc = "closed"
 
 if bc == "line-tied":
     periodic = False
@@ -30,9 +27,6 @@ elif ic == "E3":
     Lx, Ly, Lz = 8, 8, 48
     Nx, Ny, Nz = 4, 4, 24
 
-elif ic == "tv":
-    Lx, Ly, Lz = 5, 5, 10
-    Nx, Ny, Nz = 8, 8, 8
 
 if periodic:
     dirichlet_ids = ("on_boundary",)
@@ -43,158 +37,37 @@ else:
 order = 1  # polynomial degree
 tau = Constant(1)
 t = Constant(0)
-dt = Constant(1)
-T = 10000
+dt = Constant(10)
+T = 20000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
 mesh.coordinates.dat.data[:, 0] -= Lx/2
-#mesh.coordinates.dat.data[:, 1] -= Ly/2
-#mesh.coordinates.dat.data[:, 2] -= Lz/2
+mesh.coordinates.dat.data[:, 1] -= Ly/2
+mesh.coordinates.dat.data[:, 2] -= Lz/2
 
 Vg = VectorFunctionSpace(mesh, "Q", order)
 Vg_ = FunctionSpace(mesh, "Q", order)
 Vc = FunctionSpace(mesh, "NCE", order)
 Vd = FunctionSpace(mesh, "NCF", order)
 Vn = FunctionSpace(mesh, "DQ", order-1)
-Real = FunctionSpace(mesh, "R", 0)
-zero = Function(Real).assign(0)
 
-# Mixed unknowns: [B, j, H, u, E]
-Z = MixedFunctionSpace([Vd, Vc, Vc, Vd, Vc])
+# Mixed unknowns: [B, u]
+Z = MixedFunctionSpace([Vg, Vg])
 z = Function(Z)
-(B , j,  H, u, E) = split(z)
-(Bt, jt, Ht, ut, Et) = split(TestFunction(Z))
+(B , u) = split(z)
+(Bt, ut) = split(TestFunction(Z))
 
 z_prev = Function(Z)
-(Bp, jp, Hp, up, Ep) = split(z_prev)
+(Bp, up) = split(z_prev)
 B_avg = (B + Bp)/2
-E_avg = E
-#E_avg = (E + Ep)/2
-H_avg = H
-#H_avg = (H + Hp)/2  # or H?
-j_avg = j
-#j_avg = (j + jp)/2  # or j?
 u_avg = u
-#u_avg = (u + up)/2  # or u?
-
-
-X0, Y0, Z0 = SpatialCoordinate(mesh)
-# constants
-mu0 = 1.0
-I0  = 1.0
-I   = 1.0
-R   = 2.2
-a   = 0.2
-d   = 0.0
-q   = 1.0
-L   = 0.3
-eps = 1e-12
-pi  = np.pi
-
-
-def A_I_compute(X0, Y0, Z0):
-    # r_perp
-    r_perp = np.sqrt(Y0**2 + (Z0 + d)**2)
-    r_perp_safe = np.sqrt(r_perp**2 + eps)
-
-    # rho
-    rho_sq = X0**2 + (r_perp - R)**2
-    rho = np.sqrt(rho_sq)
-    rho_safe = np.sqrt(rho_sq + eps)
-
-    # chi
-    chi = np.where(a - rho > 0.0, 1.0, 0.0)
-
-    # hat_theta
-    hat_theta = np.stack((
-        np.zeros_like(X0),
-        -(Z0 + d) / r_perp_safe,
-        Y0 / r_perp_safe
-    ), axis=-1)
-
-    # elliptic parameters
-    k_a = 2 * np.sqrt(r_perp_safe * R / (4 * r_perp_safe * R + a**2))
-    k   = 2 * np.sqrt(r_perp_safe * R / ((r_perp_safe + R)**2 + X0**2))
-
-    # elliptic integrals
-    K_ellip = ellipk(k**2)   # SciPy uses m = k^2
-    E_ellip = ellipe(k**2)
-
-    # A_cal and A_diff
-    A_cal = (1 / k) * ((2 - k**2) * K_ellip - 2 * E_ellip)
-    A_diff = ((2 - k**2) * E_ellip - 2 * (1 - k**2) * K_ellip) / (k**2 * (1 - k**2))
-
-    # inside / outside
-    A_I_ex = mu0 * I / (2 * pi) * np.sqrt(R / r_perp_safe) * A_cal
-    A_I_in = mu0 * I / (2 * pi) * np.sqrt(R / r_perp_safe) * (A_cal + A_diff * (k - k_a))
-
-    # final A
-    A_exp = chi * A_I_in + (1 - chi) * A_I_ex
-
-    return A_exp[..., None] * hat_theta
-
-m = Vg_.mesh()
-W = VectorFunctionSpace(m, Vg_.ufl_element())
-X = assemble(project(m.coordinates, W))
-
-A_I = Function(Vg)
-A_I.dat.data[:] = A_I_compute(*X.dat.data_ro.T)
-A_init = Function(Vc).project(A_I)
-B_I = curl(A_init)
-
-r_perp      = sqrt(Y0**2 + (Z0 + d)**2)
-r_perp_safe = sqrt(r_perp**2 + eps)
-
-rho      = sqrt(X0**2 + (r_perp - R)**2)
-rho_safe = sqrt(rho**2 + eps)
-
-# Heaviside chi(a - rho)
-chi_ = conditional(a - rho > 0.0, 1.0, 0.0)
-
-inside_sqrt = (1.0 / R**2) + \
-              2.0 * chi_ * ((a - rho) / a**2) * (I**2 / I0**2) * (1.0 - (rho**2)/(a**2))
-
-inside_sqrt_safe = conditional(inside_sqrt > 0.0, inside_sqrt, 0.0)
-term1 = sqrt(inside_sqrt_safe)
-
-term2 = 1.0 / r_perp_safe
-
-# B_theta
-prefactor = mu0 * I0 / (2.0 * pi)
-B_theta = prefactor * (term1 + term2 - (1.0 / R))
-
-hat_theta = as_vector((
-    0.0,
-    -(Z0 + d) / r_perp_safe,
-    Y0 / r_perp_safe
-))
-
-# B_theta
-B_theta = B_theta * hat_theta
-
-# B_q
-r_p = as_vector([X0 - L, Y0, Z0 + d])
-r_m = as_vector([X0 + L, Y0, Z0 + d])
-r_p_3 = sqrt(dot(r_p, r_p)) ** 3
-r_m_3 = sqrt(dot(r_m, r_m)) ** 3
-
-B_q = q * (r_p/r_p_3 - r_m/r_m_3)
-B_init = B_I + B_theta + B_q
-
-#B_init = Function(Vd).project(B_init, form_compiler_parameters={"quadrature_degree": 12})
 
 F = (
-      inner((B-Bp)/dt, Bt) * dx
-    + inner(curl(E_avg), Bt) * dx
-    - inner(B_avg, curl(jt)) * dx
-    + inner(j_avg, jt) * dx
-    - inner(cross(Et, H_avg), u) * dx
-    + inner(E_avg, Et) * dx
+      inner((B - Bp)/dt, Bt) * dx
+    - inner(cross(u_avg, B_avg), curl(Bt)) * dx
     + inner(u_avg, ut) * dx
-    - tau * inner(cross(j_avg, H_avg)/(dot(Bp, Bp)+1e-5), ut) * dx
-    + inner(H_avg, Ht) * dx
-    - inner(B_avg, Ht) * dx
+    - tau * inner(cross(curl(B_avg), B_avg), ut) * dx 
     )
 
 # Boundary conditions
@@ -217,11 +90,42 @@ lu = {
 }
 sp = lu
        
-(B_, j_, H_, u_, E_) = z.subfunctions
+
+(X0, Y0, Z0) = x = SpatialCoordinate(mesh)
+
+# Hopf fibre
+if ic == "hopf":
+    w1 = 3
+    w2 = 2
+    s = 1
+    deno = 1 + dot(x, x)
+    coeff = 4*sqrt(s)/((pi * deno * deno * deno)*sqrt(w1**2+w2**2))
+    B_init = as_vector([coeff*2*(w2*Y0-w1*X0*Z0), -coeff*2*(w2*X0+w1*Y0*Z0), coeff*w1*(-1+X0**2+Y0**2-Z0**2)])
+
+elif ic == "E3":
+    x_c = [1, -1, 1, -1, 1, -1]
+    y_c = 0
+    z_c = [-20, -12, -4, 4, 12, 20]
+    a = sqrt(2)
+    # strength of twist
+    k = 5
+    l = 2
+    B_0 = 1
+
+    B_z = B_0
+    B_x = 0
+    B_y = 0
+    # background magnetic field
+    B_b = as_vector([0, 0, B_0])
+    for i in range(6):
+        coeff = exp((-(X0-x_c[i])**2/(a**2)) - ((Y0 - y_c)**2/(a**2)) - ((Z0 - z_c[i])**2/(l**2))) 
+        B_x += coeff * ((2 * k * B_0/a) * (-(Y0-y_c)))
+        B_y += coeff * ((2 * k * B_0/a) * ((X0-x_c[i])))
+
+    B_init = as_vector([B_x, B_y, B_z]) - B_b
+
+(B_, u_) = z.subfunctions
 B_.rename("MagneticField")
-E_.rename("ElectricField")
-H_.rename("HCurlMagneticField")
-j_.rename("Current")
 u_.rename("Velocity")
 
 def project_initial_conditions(B_init):
@@ -270,7 +174,8 @@ def project_initial_conditions(B_init):
             options_prefix="B_init_div_free_projection")
     return zp.subfunctions[0]
 
-B_.assign(project_initial_conditions(B_init))
+#B_.interpolate(project_initial_conditions(B_init))
+B_.interpolate(B_init)
 z_prev.assign(z)
 
 B_recover = Function(Vd, name="RecoveredMagneticField")
@@ -381,6 +286,7 @@ def compute_Bn(B):
 def compute_divB(B):
     return norm(div(B), "L2")
 
+
 # solver
 time_stepper = build_nonlinear_solver(F, z, bcs, solver_parameters=sp, options_prefix="time_stepper")
 
@@ -395,7 +301,6 @@ if mesh.comm.rank == 0:
 # store the initial value
 helicity, diff, diff_, energy = compute_helicity_energy(z.sub(0))
 divB = compute_divB(z.sub(0))
-
 
 if mesh.comm.rank == 0:
     row = {
@@ -430,8 +335,8 @@ while (float(t) < float(T) + 1.0e-10):
 
     if time_discr == "adaptive":
         if timestep > 100:
-            dt.assign(100)
-            tau.assign(0.1)
+            dt.assign(50)
+            tau.assign(1)
     
     if mesh.comm.rank == 0:
         row = {
