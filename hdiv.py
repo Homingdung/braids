@@ -6,7 +6,7 @@ import sys
 
 # parameters 
 output = True
-ic = "E3" # hopf or E3 
+ic = "hopf" # hopf or E3 
 bc = "closed"
 
 if bc == "line-tied":
@@ -38,7 +38,7 @@ order = 1  # polynomial degree
 tau = Constant(1)
 t = Constant(0)
 dt = Constant(0.1)
-T = 10000
+T = 20000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
@@ -371,9 +371,9 @@ while (float(t) < float(T) + 1.0e-10):
     xi = compute_xi_max(z.sub(1), z.sub(0))
 
     if time_discr == "adaptive":
-        if timestep > 100:
-            dt.assign(50)
-            tau.assign(0.1)
+        if timestep > 200:
+            dt.assign(100)
+            tau.assign(1)
     
     if mesh.comm.rank == 0:
         row = {
