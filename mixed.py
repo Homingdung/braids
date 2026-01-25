@@ -6,7 +6,7 @@ import sys
 
 # parameters 
 output = True
-ic = "hopf" # hopf or E3 
+ic = "E3" # hopf or E3 
 bc = "closed"
 
 if bc == "line-tied":
@@ -37,8 +37,11 @@ else:
 order = 1  # polynomial degree
 tau = Constant(1)
 t = Constant(0)
-dt = Constant(0.1)
-T = 20000
+if ic=="E3":
+    dt = Constant(0.1)
+else:
+    dt = Constant(1)
+T = 10000
 
 base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
@@ -69,7 +72,7 @@ j_avg = j
 #j_avg = (j + jp)/2  # or j?
 u_avg = u
 #u_avg = (u + up)/2  # or u?
-
+eps = 1e-5
 F = (
       inner((B-Bp)/dt, Bt) * dx
     + inner(curl(E_avg), Bt) * dx
@@ -78,7 +81,7 @@ F = (
     - inner(cross(Et, H_avg), u) * dx
     + inner(E_avg, Et) * dx
     + inner(u_avg, ut) * dx
-    - tau * inner(cross(j_avg, H_avg), ut) * dx
+    - tau * inner(cross(j_avg, H_avg)/(dot(Bp, Bp) + eps), ut) * dx
     + inner(H_avg, Ht) * dx
     - inner(B_avg, Ht) * dx
     )
@@ -378,9 +381,12 @@ while (float(t) < float(T) + 1.0e-10):
     xi = compute_xi_max(z.sub(1), z.sub(0))
 
     if time_discr == "adaptive":
-        if timestep > 200:
-            dt.assign(200)
-            tau.assign(1)
+        if timestep > 100:
+            if ic == "E3":
+                dt.assign(50)
+            else: 
+                dt.assign(100)
+            tau.assign(0.1)
     
     if mesh.comm.rank == 0:
         row = {
